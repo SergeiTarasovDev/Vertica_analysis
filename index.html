@@ -47,6 +47,31 @@
   --canvas:#f1f4ee; --surface:#ffffff; --surface-2:#e8efe3; --hairline:#d6e2d0; --hairline-2:#c4d5bb;
   --ink:#222c23; --ink-soft:#5b6a5a; --ink-faint:#67755f; --ink-strong:#141d15;
   --accent:#2f6b46; --accent-ink:#ffffff; --accent-soft:#dfeee4; --ok:#2b6b45; --ok-soft:#e2efe7; --danger:#a13a2c;
+}
+[data-theme="dark-graphite"]{
+  --canvas:#14171c; --surface:#1b1f26; --surface-2:#232833; --hairline:#2c3340; --hairline-2:#39424f;
+  --ink:#e6e9ee; --ink-soft:#aab3c0; --ink-faint:#8f99a6; --ink-strong:#ffffff;
+  --accent:#7cb0ff; --accent-ink:#0b0f14; --accent-soft:#1e2a3d; --ok:#7ad3a6; --ok-soft:#16281f; --danger:#ff8f84;
+}
+[data-theme="dark-warm"]{
+  --canvas:#1a1613; --surface:#221c17; --surface-2:#2b241d; --hairline:#3a3128; --hairline-2:#4a3f34;
+  --ink:#ece4d8; --ink-soft:#b8aa95; --ink-faint:#9c8e79; --ink-strong:#fff7ec;
+  --accent:#e3a45e; --accent-ink:#1a1206; --accent-soft:#33271a; --ok:#8fd0a0; --ok-soft:#1c2a20; --danger:#ff9d8b;
+}
+[data-theme="dark-navy"]{
+  --canvas:#0f1622; --surface:#151d2b; --surface-2:#1d2738; --hairline:#29364b; --hairline-2:#35455e;
+  --ink:#dde6f3; --ink-soft:#a6b5cb; --ink-faint:#8a99b0; --ink-strong:#ffffff;
+  --accent:#5ea0ff; --accent-ink:#08111f; --accent-soft:#16273f; --ok:#6fd0a0; --ok-soft:#14261d; --danger:#ff8f83;
+}
+[data-theme="slate-medium"]{
+  --canvas:#c9d0d8; --surface:#dde2e8; --surface-2:#bcc4ce; --hairline:#a2acb8; --hairline-2:#8f9aa7;
+  --ink:#1b222a; --ink-soft:#3b4650; --ink-faint:#49545f; --ink-strong:#0d1218;
+  --accent:#17539e; --accent-ink:#ffffff; --accent-soft:#b7cdea; --ok:#2c6b45; --ok-soft:#c4ddcd; --danger:#a5372b;
+}
+[data-theme="olive-medium"]{
+  --canvas:#d6d0bf; --surface:#e7e2d3; --surface-2:#c8c1ad; --hairline:#aea68f; --hairline-2:#9a917a;
+  --ink:#262218; --ink-soft:#463f30; --ink-faint:#544c3a; --ink-strong:#14110a;
+  --accent:#6f5310; --accent-ink:#fffdf3; --accent-soft:#d6c69c; --ok:#3d6b4a; --ok-soft:#c6dcc9; --danger:#a23a2c;
 } }
 @layer base{
   html,body{height:100%}
@@ -170,6 +195,11 @@
         <option value="graphite">Графит</option>
         <option value="blue">Голубой</option>
         <option value="sage">Шалфей</option>
+        <option value="dark-graphite">Тёмный графит</option>
+        <option value="dark-warm">Тёмный тёплый</option>
+        <option value="dark-navy">Тёмный синий</option>
+        <option value="slate-medium">Средний серо-синий</option>
+        <option value="olive-medium">Средний оливковый</option>
       </select>
     </label>
   </header>
@@ -1389,7 +1419,9 @@ const DATA = {"updated":"2026-10-11 08:17","schemas":[{"n":"ai_financial_analyti
   });
 
   /* theme */
+  const qTheme=new URLSearchParams(location.search).get("theme");
   const sel=el("theme-sel"); let saved="beige"; try{ saved=localStorage.getItem("vtheme")||"beige"; }catch(e){}
+  if(qTheme){ saved=qTheme; }
   function setTheme(t){ document.documentElement.setAttribute("data-theme",t); try{ localStorage.setItem("vtheme",t); }catch(e){} }
   if(sel){ sel.value=saved; sel.addEventListener("change",function(){ setTheme(this.value); }); }
   setTheme(saved);
