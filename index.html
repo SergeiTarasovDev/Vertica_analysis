@@ -1431,18 +1431,11 @@ const DATA = {"updated":"2026-10-11 08:17","schemas":[{"n":"ai_financial_analyti
     });
     el("browser-count").textContent=items.length+" из "+itemsFor(section).length;
     el("empty").hidden=items.length>0;
-    const groups=groupOrder(section);
-    let html="";
-    groups.forEach(g=>{
-      const rows=items.filter(it=>!g||!it.o.g||it.o.g===g);
-      if(!rows.length) return;
-      if(g!=="Все" || section==="pools"||section==="users"||section==="conns"){ if(g!=="Все") html+='<li class="group-label">'+esc(g)+'</li>'; }
-      rows.forEach(it=>{
-        html+='<li><button class="row" role="option" data-id="'+esc(it.id)+'" '+(it.id===selected?'aria-selected="true"':'')+'>'+
-          '<span class="primary">'+esc(it.primary)+'</span>'+(it.sub?'<span class="sub">'+esc(it.sub)+'</span>':'')+'</button></li>';
-      });
-    });
-    el("items").innerHTML=html;
+    items.sort(function(a,b){ return String(a.primary).localeCompare(String(b.primary), "ru", {sensitivity:"base"}); });
+    el("items").innerHTML = items.map(function(it){
+      return '<li><button class="row" role="option" data-id="'+esc(it.id)+'" '+(it.id===selected?'aria-selected="true"':'')+'>'+
+        '<span class="primary">'+esc(it.primary)+'</span>'+(it.sub?'<span class="sub">'+esc(it.sub)+'</span>':'')+'</button></li>';
+    }).join("");
   }
 
   function usersOfRole(role,priv){
