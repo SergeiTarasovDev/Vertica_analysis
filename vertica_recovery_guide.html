@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vertica — Восстановление кластера ROSA_DWH</title>
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --card: #ffffff;
+    --ink: #1f2933;
+    --muted: #6b7280;
+    --line: #e2e8f0;
+    --accent: #2563eb;
+    --code-bg: #1e293b;
+    --code-ink: #e2e8f0;
+    --ph: #f59e0b;
+    --warn: #dc2626;
+    --warn-bg: #fef2f2;
+    --warn-line: #fca5a5;
+    --info: #2563eb;
+    --info-bg: #eff6ff;
+    --info-line: #93c5fd;
+    --ok: #15803d;
+    --ok-bg: #f0fdf4;
+    --ok-line: #86efac;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.65;
+    font-size: 16px;
+  }
+  .page {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 32px 20px 80px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 28px 32px;
+    box-shadow: 0 1px 3px rgba(16,24,40,.06), 0 1px 2px rgba(16,24,40,.04);
+    margin-bottom: 22px;
+  }
+  header.card { border-top: 5px solid var(--accent); }
+  h1 { font-size: 27px; margin: 0 0 6px; letter-spacing: -.02em; }
+  h2 { font-size: 21px; margin: 0 0 16px; padding-bottom: 8px; border-bottom: 2px solid var(--line); }
+  h3 { font-size: 17px; margin: 22px 0 10px; }
+  .subtitle { color: var(--muted); font-size: 15px; margin: 0; }
+  p { margin: 10px 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 13.5px;
+    background: #eef2f7;
+    border: 1px solid #e2e8f0;
+    border-radius: 5px;
+    padding: 1px 6px;
+    color: #0f172a;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: 10px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    font-size: 13.5px;
+    line-height: 1.55;
+    margin: 12px 0;
+    border: 1px solid #0f172a;
+  }
+  pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    color: inherit;
+    font-size: inherit;
+  }
+  .ph { color: var(--ph); font-weight: 600; }
+  .cmt { color: #94a3b8; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 14.5px;
+  }
+  th, td {
+    border: 1px solid var(--line);
+    padding: 9px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: #f1f5f9; font-weight: 600; }
+  tbody tr:nth-child(even) { background: #fafbfc; }
+
+  .callout {
+    border-left: 4px solid;
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 16px 0;
+    font-size: 14.5px;
+  }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .callout.info { border-color: var(--info); background: var(--info-bg); }
+  .callout.ok   { border-color: var(--ok);   background: var(--ok-bg); }
+  .callout .t { display: block; font-weight: 700; margin-bottom: 4px; }
+  .callout.warn .t { color: var(--warn); }
+  .callout.info .t { color: var(--info); }
+  .callout.ok .t   { color: var(--ok); }
+
+  nav.toc {
+    background: #f8fafc;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 22px;
+    columns: 2;
+    column-gap: 30px;
+    font-size: 14.5px;
+  }
+  nav.toc a { display: block; padding: 3px 0; break-inside: avoid; }
+
+  ul.check { list-style: none; padding-left: 0; }
+  ul.check li { padding: 5px 0 5px 30px; position: relative; }
+  ul.check li::before {
+    content: "\2610";
+    position: absolute; left: 4px; top: 4px;
+    font-size: 16px; color: var(--muted);
+  }
+  ul.check li.done::before { content: "\2611"; color: var(--ok); }
+
+  .step { counter-increment: step; }
+  .badge {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 2px 9px;
+    border-radius: 999px;
+    background: #fee2e2;
+    color: #991b1b;
+    border: 1px solid #fecaca;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+  .badge.clone { background: #fee2e2; color: #991b1b; border-color: #fecaca; }
+  .badge.live  { background: #dcfce7; color: #166534; border-color: #bbf7d0; }
+  .badge.any   { background: #e0e7ff; color: #3730a3; border-color: #c7d2fe; }
+  .muted { color: var(--muted); }
+  .small { font-size: 13.5px; }
+  footer { text-align: center; color: var(--muted); font-size: 13px; padding-top: 10px; }
+  @media print {
+    body { background: #fff; font-size: 12px; }
+    .card { box-shadow: none; border: 1px solid #ccc; page-break-inside: avoid; }
+    pre { background: #f3f4f6; color: #111; border-color: #ccc; }
+    nav.toc { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="card">
+    <h1>Восстановление кластера Vertica <code>ROSA_DWH</code></h1>
+    <p class="subtitle">Превращение дев-кластера в полную копию погибшего прода + накат бэкапа</p>
+    <p class="small muted" style="margin-top:14px;">
+      Версия Vertica: <strong>11.0.1.0</strong> &nbsp;·&nbsp;
+      Платформа: <strong>Debian / Ubuntu (.deb)</strong> &nbsp;·&nbsp;
+      Режим spread: <strong>point-to-point</strong>
+    </p>
+  </header>
+
+  <!-- ================= CONTEXT ================= -->
+  <section class="card" id="context">
+    <h2>1. Ситуация</h2>
+    <ul>
+      <li>Прод-кластер Vertica (3 ноды) <strong>полностью потерян</strong>. Есть <strong>полный бэкап</strong> данных.</li>
+      <li>В дев-кластере уцелело <strong>2 ноды</strong>. Третья нода (<code>node0002</code>) потеряна и числится в каталоге как <strong>DOWN</strong>.</li>
+      <li>DevOps подняли ресурсы живых нод до продовых и развернули третью ноду как <strong>клон node0001</strong>.</li>
+      <li><strong>Цель:</strong> сделать дев полностью идентичным старому проду (имя БД и имена нод как на проде) и накатить бэкап.</li>
+    </ul>
+  </section>
+
+  <!-- ================= FACTS ================= -->
+  <section class="card" id="facts">
+    <h2>2. Зафиксированные факты</h2>
+    <table>
+      <thead><tr><th>Параметр</th><th>Значение</th></tr></thead>
+      <tbody>
+        <tr><td>Версия Vertica</td><td>11.0.1.0 (<code>vertica_11.0.1-0_amd64.deb</code>)</td></tr>
+        <tr><td>Режим spread</td><td><strong>point-to-point</strong> (unicast, явные IP нод)</td></tr>
+        <tr><td>Продовая БД</td><td><code>ROSA_DWH_PROD</code> → ноды <code>v_rosa_dwh_prod_node0001/2/3</code></td></tr>
+        <tr><td>Дев-БД (удаляем)</td><td><code>ROSA_DWH_DEV</code> → ноды <code>v_rosa_dwh_dev_node000X</code></td></tr>
+        <tr><td>node0001</td><td><code>10.244.20.50</code> — живая, UP</td></tr>
+        <tr><td>node0002</td><td><code>10.244.20.100</code> — потеряна, DOWN (в каталоге)</td></tr>
+        <tr><td>node0003</td><td><code>10.244.20.150</code> — живая, UP</td></tr>
+        <tr><td>Клон третьей ноды</td><td><code>&lt;НОВЫЙ_IP_КЛОНА&gt;</code> — новый IP, идентичность node0001</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout info">
+      <span class="t">Ключевой механизм</span>
+      Имя ноды Vertica = <code>v_&lt;имя_БД&gt;_node000N</code> (производное от имени БД).
+      Поэтому достаточно создать БД с продовым именем <code>ROSA_DWH_PROD</code> — ноды автоматически
+      станут <code>v_rosa_dwh_prod_node000X</code>, и маппинг при restore не понадобится.
+    </div>
+
+    <div class="callout warn">
+      <span class="t">Критично: DOWN-ноду удалить нельзя</span>
+      Vertica запрещает удалять ноду, пока хоть одна нода в состоянии DOWN
+      (ошибка «All nodes must be UP or STANDBY before dropping a node» — даже если удаляем
+      именно упавшую ноду). Единственный чистый способ избавиться от записи о node0002 —
+      <strong>дропнуть всю БД</strong> (дроп БД автоматически убирает определения нод).
+    </div>
+
+    <div class="callout warn">
+      <span class="t">Критично: не перепутать машины</span>
+      Клон — это точная копия <strong>живой</strong> node0001. Если случайно выполнить удаление
+      каталога/данных на оригинальной node0001 — потеряете живую ноду. Все команды с пометкой
+      <span class="badge clone">КЛОН</span> выполняются только на клоне.
+    </div>
+  </section>
+
+  <!-- ================= TOC ================= -->
+  <nav class="toc card" aria-label="Содержание">
+    <a href="#context">1. Ситуация</a>
+    <a href="#facts">2. Зафиксированные факты</a>
+    <a href="#phase0">3. Фаза 0 — Дедупликация ОС на клоне</a>
+    <a href="#phase1">4. Фаза 1 — Vertica-уровень на клоне</a>
+    <a href="#phase2">5. Фаза 2 — Добавить ноду в кластер</a>
+    <a href="#phase3">6. Фаза 3 — Пересоздать БД под прод</a>
+    <a href="#phase4">7. Фаза 4 — Restore из бэкапа</a>
+    <a href="#phase5">8. Фаза 5 — Проверка</a>
+    <a href="#app-a">A. Как определить режим spread</a>
+    <a href="#app-b">B. Пароли</a>
+    <a href="#app-c">C. Чек-лист</a>
+    <a href="#app-d">D. Ссылки на документацию</a>
+  </nav>
+
+  <!-- ================= PHASE 0 ================= -->
+  <section class="card" id="phase0">
+    <h2>3. Фаза 0 — Дедупликация ОС на клоне <span class="badge clone">КЛОН</span></h2>
+    <p>Клон виртуальной машины несёт идентичность node0001 (hostname, SSH-ключи, machine-id).
+       Перед выходом в сеть её нужно сделать уникальной. IP уже сменён DevOps.</p>
+
+    <h3>0.1 Проверка, что мы на клоне, а не на node0001</h3>
+    <pre><code>hostname          <span class="cmt"># должно быть ИМЯ КЛОНА, не node0001</span>
+hostname -I       <span class="cmt"># должен быть НОВЫЙ IP клона, не 10.244.20.50</span></code></pre>
+    <div class="callout warn">
+      <span class="t">Стоп-проверка</span>
+      Если hostname/IP не те — <strong>НЕ продолжать</strong>. Вы не на той машине.
+    </div>
+
+    <h3>0.2 Уникальный hostname</h3>
+    <pre><code>sudo hostnamectl set-hostname <span class="ph">&lt;новое_уникальное_имя&gt;</span></code></pre>
+
+    <h3>0.3 Файл <code>/etc/hosts</code></h3>
+    <pre><code>sudo vi /etc/hosts
+<span class="cmt"># заменить старые записи hostname/IP node0001 на новые</span>
+<span class="cmt"># проверить, что имя резолвится в IP КЛОНА:</span>
+getent hosts $(hostname)</code></pre>
+
+    <h3>0.4 Перегенерация SSH host-ключей</h3>
+    <pre><code><span class="cmt"># иначе клон и node0001 имеют одинаковые SSH host-ключи —</span>
+<span class="cmt"># это ломает SSH внутри кластера и даёт MITM-предупреждения</span>
+sudo rm -f /etc/ssh/ssh_host_*
+sudo ssh-keygen -A
+sudo systemctl restart ssh</code></pre>
+
+    <h3>0.5 Перегенерация machine-id</h3>
+    <pre><code>sudo rm -f /etc/machine-id
+sudo systemd-machine-id-setup</code></pre>
+  </section>
+
+  <!-- ================= PHASE 1 ================= -->
+  <section class="card" id="phase1">
+    <h2>4. Фаза 1 — Vertica-уровень на клоне <span class="badge clone">КЛОН</span></h2>
+    <p>Клон содержит каталог и данные node0001, а также <code>admintools.conf</code> и
+       <code>spread.conf</code> с идентичностью node0001 и старым IP <code>10.244.20.50</code>.
+       Всё это нужно убрать, чтобы клон не «прикинулся» node0001.</p>
+
+    <h3>1.1 Проверить, не запущена ли Vertica</h3>
+    <pre><code>ps aux | grep -i vertica | grep -v grep
+systemctl list-unit-files | grep -i vertica</code></pre>
+
+    <h3>1.2 Остановить и отключить автозапуск</h3>
+    <pre><code>sudo systemctl stop vertica_agent 2&gt;/dev/null
+sudo systemctl disable vertica_agent 2&gt;/dev/null
+
+<span class="cmt"># если найден запущенный процесс БД — остановить:</span>
+/opt/vertica/sbin/admintools -t stop_db -d ROSA_DWH_DEV 2&gt;/dev/null</code></pre>
+
+    <h3>1.3 Удалить клонированные каталог и данные node0001</h3>
+    <p>Сначала посмотреть, что лежит:</p>
+    <pre><code>ls -la /media/data/vertica/
+ls -la /media/data/vertica/ROSA_DWH_DEV/</code></pre>
+    <p>Убедиться, что это <code>...node0001_catalog</code> / <code>...node0001_data</code>, и удалить:</p>
+    <pre><code>sudo rm -rf /media/data/vertica/ROSA_DWH_DEV/v_rosa_dwh_dev_node0001_catalog
+sudo rm -rf /media/data/vertica/ROSA_DWH_DEV/v_rosa_dwh_dev_node0001_data</code></pre>
+
+    <div class="callout ok">
+      <span class="t">Почему это безопасно</span>
+      Данные дева всё равно будут затёрты полным restore, а БД <code>ROSA_DWH_DEV</code> будет
+      удалена. Главное — клон не должен поднять Vertica с идентичностью node0001.
+    </div>
+  </section>
+
+  <!-- ================= PHASE 2 ================= -->
+  <section class="card" id="phase2">
+    <h2>5. Фаза 2 — Добавить ноду в кластер <span class="badge live">ЖИВАЯ НОДА</span></h2>
+    <p>Выполняется <strong>с одной из живых нод</strong> (node0001 или node0003). Скрипт сам
+       ставит пакет на клон, проверяет связность, переконфигурирует spread и admintools.</p>
+    <pre><code>/opt/vertica/sbin/update_vertica \
+  --add-hosts <span class="ph">&lt;НОВЫЙ_IP_КЛОНА&gt;</span> \
+  --deb /media/data/distrib/vertica_11.0.1-0_amd64.deb \
+  --dba-user dbadmin \
+  --dba-user-password '<span class="ph">&lt;ОС-пароль_dbadmin&gt;</span>' \
+  --point-to-point</code></pre>
+
+    <div class="callout warn">
+      <span class="t">Обязательно <code>--point-to-point</code></span>
+      Кластер работает в режиме point-to-point. Если не указать флаг — spread переключится на
+      broadcast, и кластер сломается («cluster communication problems that prevent Vertica
+      from running properly»).
+    </div>
+
+    <div class="callout info">
+      <span class="t">Что такое <code>--dba-user-password</code></span>
+      Это <strong>ОС-пароль системного пользователя dbadmin</strong> (тот, которым заходите по ssh),
+      а НЕ пароль базы Vertica. Он должен быть одинаковым на всех нодах кластера.
+    </div>
+
+    <pre><code><span class="cmt"># проверка — хост появился в кластере</span>
+admintools -t list_allnodes</code></pre>
+  </section>
+
+  <!-- ================= PHASE 3 ================= -->
+  <section class="card" id="phase3">
+    <h2>6. Фаза 3 — Пересоздать БД под прод <span class="badge live">ЖИВАЯ НОДА</span></h2>
+    <p>Удаляем дев-БД (вместе с записью о DOWN-node0002) и создаём свежую БД с продовым именем.</p>
+
+    <h3>3.1 Остановить и дропнуть dev-БД</h3>
+    <pre><code>admintools -t stop_db -d ROSA_DWH_DEV -p '<span class="ph">&lt;DB_PASSWORD&gt;</span>'
+<span class="cmt"># если упрётся из-за лежащей node0002 — форсировать:</span>
+<span class="cmt"># admintools -t stop_db -d ROSA_DWH_DEV -p '&lt;DB_PASSWORD&gt;' -F</span>
+
+admintools -t drop_db -d ROSA_DWH_DEV</code></pre>
+
+    <h3>3.2 Создать БД с продовым именем на 3 нодах</h3>
+    <pre><code>admintools -t create_db \
+  --database=ROSA_DWH_PROD \
+  --password='<span class="ph">&lt;DB_PASSWORD&gt;</span>' \
+  --hosts=10.244.20.50,10.244.20.150,<span class="ph">&lt;НОВЫЙ_IP_КЛОНА&gt;</span> \
+  --catalog_path=/media/data/vertica \
+  --data_path=/media/data/vertica</code></pre>
+
+    <div class="callout warn">
+      <span class="t">Внимание к списку <code>--hosts</code></span>
+      Туда идут <strong>три живых</strong> адреса: node0001 (<code>10.244.20.50</code>),
+      node0003 (<code>10.244.20.150</code>) и клон (<code>&lt;НОВЫЙ_IP_КЛОНА&gt;</code>).
+      Мёртвый <code>10.244.20.100</code> включать <strong>нельзя</strong>.
+      Ноды <code>v_rosa_dwh_prod_node0001/2/3</code> создадутся автоматически.
+    </div>
+
+    <div class="callout info">
+      <span class="t">Пути каталога/данных</span>
+      Для restore пути каталога должны совпадать с продовыми. Подтвердите базу
+      (<code>/media/data/vertica</code>) по <code>cat /opt/vertica/config/admintools.conf</code>.
+    </div>
+  </section>
+
+  <!-- ================= PHASE 4 ================= -->
+  <section class="card" id="phase4">
+    <h2>7. Фаза 4 — Restore из бэкапа <span class="badge live">ЖИВАЯ НОДА</span></h2>
+
+    <h3>4.1 Подготовить vbr-конфиг</h3>
+    <pre><code><span class="cmt"># скопировать продовой vbr.ini на ноду</span>
+scp <span class="ph">&lt;откуда_есть_бэкап&gt;</span>:<span class="ph">&lt;путь_vbr.ini&gt;</span> /home/dbadmin/vbr.ini
+
+<span class="cmt"># проверить ключевые секции</span>
+cat /home/dbadmin/vbr.ini</code></pre>
+    <p class="small">Обязательно должно быть:</p>
+    <ul class="small">
+      <li><code>[database]</code> → <code>dbName = ROSA_DWH_PROD</code></li>
+      <li><code>[Mapping]</code> → <code>v_rosa_dwh_prod_node000X = &lt;backupHost&gt;:&lt;backupDir&gt;</code></li>
+      <li>бэкап-директория доступна с нод дев-кластера</li>
+    </ul>
+
+    <h3>4.2 Остановить БД (restore требует DOWN)</h3>
+    <pre><code>admintools -t stop_db -d ROSA_DWH_PROD -p '<span class="ph">&lt;DB_PASSWORD&gt;</span>'</code></pre>
+
+    <h3>4.3 Запустить restore</h3>
+    <pre><code>vbr --task restore --config-file /home/dbadmin/vbr.ini</code></pre>
+
+    <div class="callout info">
+      <span class="t">Требования полного restore (из доки)</span>
+      Целевая БД должна: быть <strong>DOWN</strong>; иметь то же <strong>имя</strong>, то же
+      <strong>число нод</strong> и <strong>идентичные имена нод</strong>, тот же <strong>путь
+      каталога</strong> и те же <strong>порты</strong>, что и источник. Все эти условия
+      выполняются: БД <code>ROSA_DWH_PROD</code>, 3 ноды <code>v_rosa_dwh_prod_node000X</code>.
+    </div>
+  </section>
+
+  <!-- ================= PHASE 5 ================= -->
+  <section class="card" id="phase5">
+    <h2>8. Фаза 5 — Проверка <span class="badge live">ЖИВАЯ НОДА</span></h2>
+    <pre><code><span class="cmt"># старт БД после restore</span>
+admintools -t start_db -d ROSA_DWH_PROD -p '<span class="ph">&lt;DB_PASSWORD&gt;</span>'
+
+<span class="cmt"># все ноды UP</span>
+vsql -U dbadmin -w '<span class="ph">&lt;DB_PASSWORD&gt;</span>' -c \
+  "SELECT node_name, node_state FROM node_states ORDER BY 1;"
+
+<span class="cmt"># контрольная проверка данных</span>
+vsql -U dbadmin -w '<span class="ph">&lt;DB_PASSWORD&gt;</span>' -c \
+  "SELECT COUNT(*) FROM <span class="ph">&lt;проверочная_таблица&gt;</span>;"</code></pre>
+
+    <table>
+      <thead><tr><th>Ожидаемый результат</th><th>Значение</th></tr></thead>
+      <tbody>
+        <tr><td>Ноды</td><td><code>v_rosa_dwh_prod_node0001/2/3</code> — все <strong>UP</strong></td></tr>
+        <tr><td>K-safety</td><td><code>SELECT current_fault_tolerance FROM system;</code> → <code>1</code></td></tr>
+        <tr><td>Данные</td><td>Контрольные запросы возвращают ожидаемые объёмы</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ================= APPENDIX A ================= -->
+  <section class="card" id="app-a">
+    <h2>Приложение A — Как определить режим spread</h2>
+    <p>Актуальный конфиг spread хранится <strong>в каталоге БД</strong> (не в <code>/opt/vertica/config</code>).
+       Путь виден в аргументе <code>-c</code> запущенного процесса:</p>
+    <pre><code>ps -ef | grep -i spread | grep -v grep
+<span class="cmt"># пример:</span>
+<span class="cmt"># .../spread -c /media/data/vertica/&lt;DB&gt;/v_&lt;db&gt;_node000N_catalog/spread.conf -D ...</span></code></pre>
+    <p>Открыть найденный файл и посмотреть блок <code>Spread_Segment</code>:</p>
+    <table>
+      <thead><tr><th>Режим</th><th>Как выглядит конфиг</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>point-to-point</strong></td>
+          <td>Явные IP каждой ноды с метками <code>N&lt;ip&gt;</code>:
+<pre style="margin:8px 0"><code>Spread_Segment 10.244.20.50:4803 {
+  N010244020050  10.244.20.50 { 10.244.20.50 }
+}</code></pre></td>
+        </tr>
+        <tr>
+          <td><strong>broadcast</strong></td>
+          <td>Один сегмент с broadcast-адресом подсети:
+<pre style="margin:8px 0"><code>Spread_Segment 4803 {
+  10.244.20.255
+}</code></pre></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ================= APPENDIX B ================= -->
+  <section class="card" id="app-b">
+    <h2>Приложение B — Пароли: что куда</h2>
+    <table>
+      <thead><tr><th>Пароль</th><th>Что это</th><th>Где используется</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>ОС-пароль dbadmin</strong></td>
+          <td>Пароль системного (Linux) пользователя <code>dbadmin</code></td>
+          <td><code>ssh dbadmin@...</code>, sudo, <code>--dba-user-password</code></td>
+        </tr>
+        <tr>
+          <td><strong>Пароль БД</strong></td>
+          <td>Пароль Vertica-суперпользователя <code>dbadmin</code></td>
+          <td><code>vsql -w</code>, <code>create_db --password</code>, <code>stop_db -p</code>, <code>vbr</code></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="callout info">
+      <span class="t">Как отличить</span>
+      ОС-пароль — то, чем заходите по <code>ssh</code>. Пароль БД — то, чем заходите в <code>vsql</code>.
+      В командах <code>update_vertica</code> используется <strong>ОС-пароль</strong>.
+    </div>
+  </section>
+
+  <!-- ================= APPENDIX C ================= -->
+  <section class="card" id="app-c">
+    <h2>Приложение C — Чек-лист</h2>
+    <ul class="check">
+      <li class="done">Новый IP у клона (сделан DevOps)</li>
+      <li>Уникальный hostname клона</li>
+      <li>Поправлен <code>/etc/hosts</code></li>
+      <li>Перегенерированы SSH host-ключи</li>
+      <li>Перегенерирован machine-id</li>
+      <li>Vertica на клоне остановлена и не стартует сама</li>
+      <li>Удалён клонированный каталог/данные node0001 <em>(на клоне!)</em></li>
+      <li>Клон добавлен в кластер (<code>update_vertica --add-hosts --point-to-point</code>)</li>
+      <li>Dev-БД <code>ROSA_DWH_DEV</code> остановлена и удалена</li>
+      <li>Создана БД <code>ROSA_DWH_PROD</code> на 3 нодах (3 ноды UP, K=1)</li>
+      <li>Подготовлен и проверен <code>vbr.ini</code> (dbName = ROSA_DWH_PROD)</li>
+      <li>БД остановлена, выполнен <code>vbr --task restore</code></li>
+      <li>БД запущена, ноды UP, данные проверены</li>
+    </ul>
+  </section>
+
+  <!-- ================= APPENDIX D ================= -->
+  <section class="card" id="app-d">
+    <h2>Приложение D — Разделы документации Vertica</h2>
+
+    <div class="callout info">
+      <span class="t">Документация переехала: docs.vertica.com → docs.rocketsoftware.com</span>
+      Старые ссылки <code>docs.vertica.com/11.0.x/…</code> теперь редиректят на новый хостинг
+      <strong>Rocket Software</strong>. Формат URL:
+      <code>https://docs.rocketsoftware.com/bundle/&lt;бандл&gt;/page/&lt;путь&gt;.html</code> —
+      структура путей сохранена, добавляется суффикс <code>.html</code>.<br>
+      Доступные бандлы версий: <code>vertica_264</code>, <code>vertica_263</code> (актуальная),
+      <code>vertica_262</code>, <code>vertica_261</code>, <code>vertica_254…251</code>,
+      <code>vertica_244…241</code>, <code>vertica_234/233</code>, <code>vertica_1204</code> (12.0.4),
+      <code>vertica_1111</code> (11.1.1), <code>vertica_legacy</code>.
+      Для кластера 11.0.1.0 ближе всего <code>vertica_1111</code> — версия меняется прямо в URL.
+    </div>
+
+    <table>
+      <thead><tr><th>Тема</th><th>Актуальная ссылка (bundle 26.3)</th></tr></thead>
+      <tbody>
+        <tr><td>Добавление хостов в кластер</td><td><a href="https://docs.rocketsoftware.com/bundle/vertica_26.3/page/admin/managing-db/managing-nodes/adding-nodes/adding-hosts-to-cluster.html">admin/…/adding-hosts-to-cluster</a></td></tr>
+        <tr><td>Добавление нод в БД (<code>db_add_node</code>)</td><td><a href="https://docs.rocketsoftware.com/bundle/vertica_26.3/page/admin/managing-db/managing-nodes/adding-nodes/adding-nodes-to-db.html">admin/…/adding-nodes-to-db</a></td></tr>
+        <tr><td>Опции <code>install_vertica</code></td><td><a href="https://docs.rocketsoftware.com/bundle/vertica_26.3/page/setup/set-up-on-premises/install-using-command-line/install-with-installation-script/install-vertica-options.html">setup/…/install-vertica-options</a></td></tr>
+        <tr><td>Удаление нод (нельзя при DOWN)</td><td><a href="https://docs.rocketsoftware.com/bundle/vertica_26.3/page/admin/managing-db/managing-nodes/removing-nodes/removing-nodes-from-db.html">admin/…/removing-nodes-from-db</a></td></tr>
+        <tr><td>Дроп БД</td><td><a href="https://docs.rocketsoftware.com/bundle/vertica_26.3/page/admin/using-admin-tools/admin-tools-reference/config-menu-options/dropping-db.html">admin/…/dropping-db</a></td></tr>
+        <tr><td>Создание БД</td><td><a href="https://docs.rocketsoftware.com/bundle/vertica_26.3/page/admin/using-admin-tools/admin-tools-reference/config-menu-options/creating-db.html">admin/…/creating-db</a></td></tr>
+        <tr><td>Restore из полного бэкапа</td><td><a href="https://docs.rocketsoftware.com/bundle/vertica_26.3/page/admin/backup-and-restore/restoring-backups/restoring-db-from-full-backup.html">admin/…/restoring-db-from-full-backup</a></td></tr>
+        <tr><td>Restore на альтернативный кластер</td><td><a href="https://docs.rocketsoftware.com/bundle/vertica_26.3/page/admin/backup-and-restore/restoring-backups/restoring-db-to-an-alternate-cluster.html">admin/…/restoring-db-to-an-alternate-cluster</a></td></tr>
+        <tr><td>Установка / снятие Vertica</td><td><a href="https://docs.rocketsoftware.com/bundle/vertica_26.3/page/setup/uninstall.html">setup/uninstall</a></td></tr>
+      </tbody>
+    </table>
+    <p class="small muted">Если страница переехала внутри раздела — поиск по доке:
+      <a href="https://docs.rocketsoftware.com/search">docs.rocketsoftware.com/search</a>.</p>
+  </section>
+
+  <footer>
+    Vertica 11.0.x · Руководство по восстановлению ROSA_DWH · сформировано из рабочей переписки
+  </footer>
+
+</div>
+</body>
+</html>

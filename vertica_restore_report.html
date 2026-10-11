@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Отчёт — Восстановление Vertica ROSA_DWH_PROD из бэкапа</title>
+<style>
+  :root{
+    --bg:#f4f6f9; --card:#fff; --ink:#1f2933; --muted:#6b7280; --line:#e2e8f0;
+    --accent:#2563eb; --code-bg:#1e293b; --code-ink:#e2e8f0; --ph:#f59e0b;
+    --warn:#dc2626; --warn-bg:#fef2f2; --warn-line:#fca5a5;
+    --ok:#15803d; --ok-bg:#f0fdf4; --ok-line:#86efac;
+    --info:#2563eb; --info-bg:#eff6ff; --info-line:#93c5fd;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    line-height:1.65;font-size:16px}
+  .page{max-width:960px;margin:0 auto;padding:32px 20px 80px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:26px 30px;
+    box-shadow:0 1px 3px rgba(16,24,40,.06),0 1px 2px rgba(16,24,40,.04);margin-bottom:20px}
+  header.card{border-top:5px solid var(--accent)}
+  h1{font-size:26px;margin:0 0 6px;letter-spacing:-.02em}
+  h2{font-size:21px;margin:0 0 16px;padding-bottom:8px;border-bottom:2px solid var(--line)}
+  h3{font-size:17px;margin:22px 0 10px}
+  .subtitle{color:var(--muted);font-size:15px;margin:0}
+  code{font-family:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;font-size:13.5px;
+    background:#eef2f7;border:1px solid #e2e8f0;border-radius:5px;padding:1px 6px;color:#0f172a}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:16px 18px;overflow-x:auto;
+    font-size:13.5px;line-height:1.55;margin:12px 0;border:1px solid #0f172a}
+  pre code{background:none;border:none;padding:0;color:inherit;font-size:inherit}
+  .ph{color:var(--ph);font-weight:600}
+  .cmt{color:#94a3b8}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14.5px}
+  th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+  th{background:#f1f5f9;font-weight:600}
+  tbody tr:nth-child(even){background:#fafbfc}
+  .callout{border-left:4px solid;border-radius:8px;padding:14px 18px;margin:16px 0;font-size:14.5px}
+  .callout.warn{border-color:var(--warn);background:var(--warn-bg)}
+  .callout.info{border-color:var(--info);background:var(--info-bg)}
+  .callout.ok{border-color:var(--ok);background:var(--ok-bg)}
+  .callout .t{display:block;font-weight:700;margin-bottom:4px}
+  .callout.warn .t{color:var(--warn)}
+  .callout.info .t{color:var(--info)}
+  .callout.ok .t{color:var(--ok)}
+  ol.short{margin:8px 0;padding-left:22px}
+  ol.short li{padding:3px 0}
+  .badge{display:inline-block;font-size:12px;font-weight:700;padding:2px 9px;border-radius:999px;margin-right:6px}
+  .badge.done{background:#dcfce7;color:#166534;border:1px solid #bbf7d0}
+  .badge.todo{background:#fef9c3;color:#854d0e;border:1px solid #fde68a}
+  .badge.stop{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
+  .muted{color:var(--muted)} .small{font-size:13.5px}
+  .phase{border-left:4px solid var(--accent);padding-left:16px;margin:22px 0}
+  .phase h3{margin-top:4px}
+  footer{text-align:center;color:var(--muted);font-size:13px;padding-top:10px}
+  @media print{body{background:#fff;font-size:12px}.card{box-shadow:none;border:1px solid #ccc;page-break-inside:avoid}pre{background:#f3f4f6;color:#111;border-color:#ccc}}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="card">
+    <h1>Восстановление Vertica <code>ROSA_DWH_PROD</code> из продового бэкапа</h1>
+    <p class="subtitle">Отчёт о проделанном процессе · краткая хронология + подробная версия</p>
+    <p style="margin-top:14px">
+      <span class="badge done">SSH починен</span>
+      <span class="badge done">Кластер создан (3 ноды UP)</span>
+      <span class="badge done">Конфиг бэкапа разложен</span>
+      <span class="badge todo">S3-креды → заменить</span>
+      <span class="badge todo">Restore → выполнить</span>
+    </p>
+  </header>
+
+  <!-- ============ КРАТКАЯ ВЕРСИЯ ============ -->
+  <section class="card" id="short">
+    <h2>Краткая версия (хронология)</h2>
+    <ol class="short">
+      <li>Попробовали <code>install_vertica</code> — ошибка доступа SSH (ключ просил подтверждение, команда падала).</li>
+      <li>То же самое с <code>update_vertica</code>.</li>
+      <li>Починили SSH.</li>
+      <li>Сделали <code>update_vertica --add-hosts</code> — новая нода влита в кластер.</li>
+      <li>Сделали <code>db_add_node</code> — получилось 4 ноды. Но старую удалить не получится: она в статусе <strong>DOWN</strong>.</li>
+      <li>Решили пока оставить дев-базу и рядом создать прод: <code>stop_db</code>, затем <code>create_db</code>.</li>
+      <li>База создалась. Три ноды <strong>UP</strong>.</li>
+      <li>Ушли спать.</li>
+      <li>Нужно подготовить файлы конфига загрузки бэкапа, как на проде (остался в репе <code>vertica-backup-config/production</code>).</li>
+      <li>Подготовили конфиг, вставили на все ноды через <code>cat &gt; /home/dbadmin/backup_s3_11_prod.ini &lt;&lt; 'EOF'</code>.</li>
+      <li>Нужно заменить S3-пользователя, через которого читается бэкап (права <strong>только на чтение</strong>, чтобы не испортить данные в S3).</li>
+      <li>Подменяем в <code>/home/dbadmin/.aws/credentials</code>.</li>
+      <li>Можно переходить к запуску восстановления.</li>
+      <li>Как сделать, чтобы терминал не отключился при долгой работе restore.</li>
+      <li>Остановить Vertica: <code>admintools -t stop_db -d ROSA_DWH_PROD -p &lt;DB_PASSWORD&gt;</code>.</li>
+      <li>Запустить восстановление: <code>export …; vbr -t restore -c /home/dbadmin/backup_s3_11_prod.ini</code>.</li>
+    </ol>
+  </section>
+
+  <!-- ============ ПОДРОБНАЯ ВЕРСИЯ ============ -->
+  <section class="card" id="detail">
+    <h2>Подробная версия</h2>
+
+    <!-- 1-2 -->
+    <div class="phase">
+      <h3>1–2. Ошибки SSH при <code>install_vertica</code> / <code>update_vertica</code></h3>
+      <p>Vertica при установке/добавлении хостов ходит по SSH <strong>под пользователем dbadmin</strong> на все ноды кластера. Симптомы — «Permission denied (publickey)» и запрос подтверждения host-ключа.</p>
+      <div class="callout info">
+        <span class="t">Причина</span>
+        У <code>dbadmin</code> не был настроен passwordless SSH на удалённые ноды. Из доки: <em>«The administrative account must be able to SSH to all hosts without specifying a password»</em>. Плюс host-ключи не были приняты (первое подключение).
+      </div>
+      <p class="small muted">Отдельно путало то, что <code>install_vertica -s localhost</code> (из гайда коллеги) — вообще тупиковый путь: узел с <code>localhost</code> потом нельзя влить в кластер.</p>
+    </div>
+
+    <!-- 3 -->
+    <div class="phase">
+      <h3>3. Починили SSH</h3>
+      <p>Настроили passwordless SSH для <code>dbadmin</code> на все ноды и приняли host-ключи.</p>
+      <pre><code><span class="cmt"># под dbadmin на инициаторе</span>
+ssh-keygen -t rsa -b 4096 -N "" -f ~/.ssh/id_rsa
+mkdir -p ~/.ssh &amp;&amp; chmod 700 ~/.ssh
+cat ~/.ssh/id_rsa.pub &gt;&gt; ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+ssh-copy-id dbadmin@&lt;нода2&gt;
+ssh-copy-id dbadmin@&lt;нода3&gt;
+ssh-copy-id dbadmin@&lt;клон&gt;</code></pre>
+      <p>Проверка: <code>ssh dbadmin@&lt;нода&gt; hostname</code> — без пароля, возвращает имя нужной ноды.</p>
+    </div>
+
+    <!-- 4-5 -->
+    <div class="phase">
+      <h3>4–5. <code>update_vertica --add-hosts</code> и <code>db_add_node</code> → 4 ноды</h3>
+      <p>Новый хост влили в кластер, затем добавили ноду в БД. Стало <strong>4 ноды</strong>, но старая (мёртвая node0002) осталась в статусе <strong>DOWN</strong>.</p>
+      <div class="callout warn">
+        <span class="t">DOWN-ноду удалить нельзя</span>
+        Vertica не даёт удалить ноду, пока хоть одна нода DOWN: ошибка <em>«All nodes must be UP or STANDBY before dropping a node»</em> — даже если удаляешь именно упавшую. Чистого способа «выкинуть» её без замены/пересоздания нет.
+      </div>
+    </div>
+
+    <!-- 6-7 -->
+    <div class="phase">
+      <h3>6–7. Оставили dev и создали prod рядом</h3>
+      <p>Пошли обходным путём: <code>stop_db ROSA_DWH_DEV</code> → <code>create_db ROSA_DWH_PROD</code>. Дев-база просто остановлена и остаётся «зависшей» (её node0002 мертва).</p>
+      <pre><code>admintools -t stop_db -d ROSA_DWH_DEV -p '&lt;пароль&gt;' -F
+admintools -t create_db \
+  --database=ROSA_DWH_PROD \
+  --password='&lt;пароль&gt;' \
+  --hosts=10.244.20.50,10.244.20.150,10.244.20.201 \
+  --catalog_path=/media/data/vertica --data_path=/media/data/vertica</code></pre>
+      <div class="callout ok">
+        <span class="t">Итог шага</span>
+        БД <code>ROSA_DWH_PROD</code> создана, ноды автоматически назвались <code>v_rosa_dwh_prod_node0001/2/3</code>, все три <strong>UP</strong>.
+      </div>
+      <p class="small muted">Формально «переименование» dev → prod в Vertica невозможно (нет <code>ALTER DATABASE … RENAME</code>); единственный путь — пересоздать БД с нужным именем. Что и было сделано.</p>
+    </div>
+
+    <!-- 9-10 -->
+    <div class="phase">
+      <h3>9–10. Конфиг бэкапа разложен на ноды</h3>
+      <p>Продовый конфиг <code>backup_s3_11_prod.ini</code> забрали из репозитория и создали на всех нодах через heredoc. Ключевое — последняя строка <code>EOF</code> без кавычек.</p>
+      <pre><code>cat &gt; /home/dbadmin/backup_s3_11_prod.ini &lt;&lt; 'EOF'
+[S3]
+s3_backup_path = s3://analytics-prod-vertica-backup/prod-11/
+s3_backup_file_system_path = []:/home/dbadmin/backup_locks_dir_11/
+
+[Misc]
+retryCount = 15
+retryDelay = 10
+tempDir = /media/data/vertica_backup_11
+restorePointLimit = 2
+
+[Database]
+dbName = ROSA_DWH_PROD
+dbPromptForPassword = True
+
+[Transmission]
+concurrency_backup = 4
+port_rsync = 50000
+EOF
+chmod 600 /home/dbadmin/backup_s3_11_prod.ini</code></pre>
+      <div class="callout info">
+        <span class="t">Нюансы конфига</span>
+        <ul style="margin:6px 0">
+          <li>Секция <code>[S3]</code> — устаревшая (deprecated с 10.1), но в 11.0 работает. <code>[CloudStorage]</code> — её замена, но их <strong>нельзя совмещать</strong>; и переводить бэкап на неё не нужно.</li>
+          <li><code>[Mapping]</code> не добавлять — взаимоисключим с <code>[S3]</code>.</li>
+          <li><code>snapshotName</code> не задаём (в проде был закомментирован) — фактическое имя серии покажет <code>quick-check</code>.</li>
+          <li>Создать каталоги из конфига: <code>mkdir -p /media/data/vertica_backup_11 /home/dbadmin/backup_locks_dir_11</code>.</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- 11-12 -->
+    <div class="phase">
+      <h3>11–12. Замена S3-пользователя (только чтение)</h3>
+      <p>Подменяем креды в <code>/home/dbadmin/.aws/credentials</code>, по возможности на нодах все — данные при restore тянут все ноды, хотя дока и говорит про «initiator host».</p>
+      <pre><code><span class="cmt"># бэкап текущих</span>
+cp -a /home/dbadmin/.aws /home/dbadmin/.aws.bak.$(date +%Y%m%d_%H%M%S)
+
+<span class="cmt"># новые креды (read-only пользователь)</span>
+cat &gt; /home/dbadmin/.aws/credentials &lt;&lt; 'EOF'
+[default]
+aws_access_key_id = &lt;НОВЫЙ_KEY_ID&gt;
+aws_secret_access_key = &lt;НОВЫЙ_SECRET&gt;
+EOF
+chown -R dbadmin:verticadba /home/dbadmin/.aws
+chmod 700 /home/dbadmin/.aws
+chmod 600 /home/dbadmin/.aws/credentials
+
+<span class="cmt"># раздать на остальные ноды</span>
+for h in 10.244.20.150 10.244.20.201; do
+  sudo -u dbadmin scp -r /home/dbadmin/.aws dbadmin@$h:/home/dbadmin/
+done</code></pre>
+      <div class="callout warn">
+        <span class="t">Проверьте env-переменные</span>
+        Если в сессии заданы <code>AWS_ACCESS_KEY_ID</code> / <code>AWS_SECRET_ACCESS_KEY</code>, они <strong>перебьют</strong> файл. Уберите: <code>unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY</code>.
+      </div>
+    </div>
+
+    <!-- 14 -->
+    <div class="phase">
+      <h3>14. Чтобы терминал не отключился при долгом restore</h3>
+      <p>Не держать процесс в foreground SSH-сессии — иначе при обрыве он получит SIGHUP и умрёт. Использовать <code>tmux</code>/<code>screen</code> (лучше) или <code>nohup</code>.</p>
+      <pre><code><span class="cmt"># tmux — рекомендую</span>
+sudo apt install -y tmux
+tmux new -s restore
+<span class="cmt"># … запускаем restore внутри …</span>
+<span class="cmt"># отсоединиться: Ctrl+B, затем D</span>
+<span class="cmt"># вернуться:    tmux attach -t restore</span>
+
+<span class="cmt"># либо nohup, без доп. пакетов</span>
+nohup vbr -t restore -c /home/dbadmin/backup_s3_11_prod.ini &gt; /home/dbadmin/restore.log 2&gt;&amp;1 &amp;</code></pre>
+      <p class="small"><strong>MobaXterm:</strong> включите keepalive (Settings → SSH → keepalive, 30–60 с) — это снижает риск разрыва по простою, но <strong>не спасает</strong> от внезапного обрыва, поэтому tmux/nohup всё равно нужны.</p>
+    </div>
+
+    <!-- 15 -->
+    <div class="phase">
+      <h3>15. Остановка БД (обязательна для полного restore)</h3>
+      <pre><code><span class="cmt"># закрыть сессии</span>
+/opt/vertica/bin/vsql -U dbadmin -w '&lt;DB_PASSWORD&gt;' -c "SELECT CLOSE_ALL_SESSIONS();"
+
+<span class="cmt"># остановить базу</span>
+/opt/vertica/bin/admintools -t stop_db -d ROSA_DWH_PROD -p '&lt;DB_PASSWORD&gt;'</code></pre>
+      <div class="callout warn">
+        <span class="t">Важно</span>
+        Полный restore выполняется <strong>только на остановленной БД</strong>. Точечный (<code>--restore-objects</code>) — можно на работающей, но у нас полный.
+      </div>
+    </div>
+
+    <!-- 16 -->
+    <div class="phase">
+      <h3>16. Запуск полного восстановления</h3>
+      <pre><code>export VBR_BACKUP_STORAGE_ENDPOINT_URL=https://storage.yandexcloud.net/
+export VBR_COMMUNAL_STORAGE_ENDPOINT_URL=https://storage.yandexcloud.net/
+
+<span class="cmt"># холостая проверка (можно и до stop_db)</span>
+vbr -t quick-check -c /home/dbadmin/backup_s3_11_prod.ini
+
+<span class="cmt"># ПОЛНЫЙ restore — БЕЗ --restore-objects</span>
+vbr -t restore -c /home/dbadmin/backup_s3_11_prod.ini</code></pre>
+      <ul class="small">
+        <li><strong>Без</strong> <code>--restore-objects</code> — иначе восстановится только один объект.</li>
+        <li>Конкретный архив: <code>--archive='YYYYMMDD_HHMMSS'</code> (доступно ~3 дня).</li>
+        <li>Полный restore восстанавливает всё: схемы, таблицы, проекции, а также пользователей/роли/привилегии.</li>
+      </ul>
+    </div>
+
+    <!-- После -->
+    <div class="phase">
+      <h3>После завершения — старт и проверка</h3>
+      <pre><code>/opt/vertica/bin/admintools -t start_db -d ROSA_DWH_PROD -p '&lt;DB_PASSWORD&gt;'
+
+/opt/vertica/bin/vsql -U dbadmin -w '&lt;DB_PASSWORD&gt;' -c \
+  "SELECT node_name, node_state FROM node_states ORDER BY 1;"
+/opt/vertica/bin/vsql -U dbadmin -w '&lt;DB_PASSWORD&gt;' -c \
+  "SELECT COUNT(*) FROM &lt;таблица&gt;;"</code></pre>
+    </div>
+  </section>
+
+  <!-- ============ МОНИТОРИНГ ============ -->
+  <section class="card" id="monitor">
+    <h2>Как контролировать процесс</h2>
+    <pre><code><span class="cmt"># прогресс самого vbr ("Copying... N out of M, X%")</span>
+tail -f /home/dbadmin/restore.log
+
+<span class="cmt"># логи vbr в tempDir</span>
+ls -lt /media/data/vertica_backup_11/ | head
+tail -f /media/data/vertica_backup_11/&lt;свежий&gt;.log
+
+<span class="cmt"># процесс жив?</span>
+ps aux | grep -i vbr | grep -v grep
+
+<span class="cmt"># в tmux/screen — просто переподключиться</span>
+tmux attach -t restore</code></pre>
+  </section>
+
+  <!-- ============ ПРЕДУСЛОВИЯ ============ -->
+  <section class="card" id="req">
+    <h2>Проверенные предпосылки restore</h2>
+    <table>
+      <thead><tr><th>Требование полного restore</th><th>Статус</th></tr></thead>
+      <tbody>
+        <tr><td>Имя БД = <code>ROSA_DWH_PROD</code></td><td>✅</td></tr>
+        <tr><td>Число нод = 3</td><td>✅</td></tr>
+        <tr><td>Имена нод = <code>v_rosa_dwh_prod_node000X</code></td><td>✅</td></tr>
+        <tr><td>Путь каталога = как на проде</td><td>✅</td></tr>
+        <tr><td>Порты = 5433</td><td>✅</td></tr>
+        <tr><td>Версия Vertica = 11.0.1-0 (бэкап = целевой)</td><td>✅</td></tr>
+        <tr><td>Конфиг + S3-креды</td><td>⏳ в процессе</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>
+    Vertica 11.0.x · Отчёт по восстановлению ROSA_DWH_PROD · из рабочей переписки
+  </footer>
+
+</div>
+</body>
+</html>
