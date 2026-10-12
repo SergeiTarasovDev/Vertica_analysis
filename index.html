@@ -1487,7 +1487,7 @@ chmod 700 /media/data/vertica_backup_11</pre><p>Identity: <span class="mono">.VB
       document.getElementById("ln-out").addEventListener("click",function(){set(scale/1.2);});
       document.getElementById("ln-reset").addEventListener("click",function(){set(1);});
       function collect(id){ var res={}, st=[id]; res[id]=1; while(st.length){ var cur=st.pop(); var ps=rev[cur]||[]; for(var i=0;i<ps.length;i++){ if(!res[ps[i]]){ res[ps[i]]=1; st.push(ps[i]); } } } return res; }
-      function closure(id){ var res={}, st=[id]; res[id]=1; while(st.length){ var cur=st.pop(); var ps=(rev[cur]||[]).concat(fwd[cur]||[]); for(var i=0;i<ps.length;i++){ if(!res[ps[i]]){ res[ps[i]]=1; st.push(ps[i]); } } } return res; }
+      function closure(id){ var res={}, seen={}, st=[id]; res[id]=1; seen[id]=1; while(st.length){ var cur=st.pop(); var ps=rev[cur]||[]; for(var i=0;i<ps.length;i++){ if(!seen[ps[i]]){ seen[ps[i]]=1; res[ps[i]]=1; st.push(ps[i]); } } } st=[id]; while(st.length){ var cur=st.pop(); var ps=fwd[cur]||[]; for(var i=0;i<ps.length;i++){ if(!seen[ps[i]]){ seen[ps[i]]=1; res[ps[i]]=1; st.push(ps[i]); } } } return res; }
       function applyState(){
         var vis={};
         if(focusId!==null && pos[focusId]!==undefined){ vis=closure(focusId); }
@@ -1501,7 +1501,7 @@ chmod 700 /media/data/vertica_backup_11</pre><p>Identity: <span class="mono">.VB
         }
         nodeEls.forEach(function(g){ var id=g.getAttribute("data-id"); if(!vis[id]) return; var nx=curx[id]; if(nx<x1)x1=nx; if(pos[id].y<y1)y1=pos[id].y; if(nx+BW>x2)x2=nx+BW; if(pos[id].y+BH>y2)y2=pos[id].y+BH; });
         edgeEls.forEach(function(ed){ var a=ed.getAttribute("data-a"), b=ed.getAttribute("data-b"); var on=(!!vis[a]&&!!vis[b]); ed.style.display=on?"":"none"; if(!on) return; var ax=curx[a]+BW, ay=pos[a].y+BH/2, bx=curx[b], by=pos[b].y+BH/2, cx=bx-ax; ed.setAttribute("d","M"+ax+" "+ay+" C"+(ax+cx*.45)+" "+ay+" "+(bx-cx*.45)+" "+by+" "+bx+" "+by); });
-        if(focusId===null || pos[focusId]===undefined){ if(n){ var p=20; VB={x:x1-p,y:y1-p,w:(x2-x1)+2*p,h:(y2-y1)+2*p}; } else { VB={x:0,y:0,w:W0,h:H0}; } }
+        if(n){ var p=20; VB={x:x1-p,y:y1-p,w:(x2-x1)+2*p,h:(y2-y1)+2*p}; } else { VB={x:0,y:0,w:W0,h:H0}; }
         nodeEls.forEach(function(g){ g.classList.toggle("focused", focusId!==null && g.getAttribute("data-id")===focusId); });
         if(activeEl) activeEl.textContent=(focusId!==null ? "фокус: "+focusId+"  ·  " : "")+"на диаграмме: "+n+" из "+nodeEls.length;
         render();
