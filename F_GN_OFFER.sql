@@ -50,7 +50,6 @@ erp_order AS (
     LEFT JOIN public.ERP_ORDER_POSITIONS eop
         ON eop.sale_number = eo.sale_number
     WHERE eo.created_at >= '2018-01-01'
-		AND eo.created_at >= TIMESTAMP '2026-09-01 00:00:00'   -- новая строка
     AND CASE
               WHEN eo._processed_at > eop._processed_at THEN eo._processed_at
               ELSE eop._processed_at

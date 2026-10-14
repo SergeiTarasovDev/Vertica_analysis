@@ -1,30 +1,5 @@
--- =====================================================================
--- P_GN_ORDER: перевод Spark-расчета (dmt_spark/src/p-gn-order.py) в Vertica SQL
--- Vertica 11.0.1
---
--- Для сверки:
---   sandbox_analytics.P_GN_ORDER  (загружена с 1 сентября 2026)
---   preparation.P_GN_ORDER        (Spark)
---
--- Исправления относительно P_GN_ORDER.txt:
---   1. Инкрементальные источники (SALE_ORDER, CASHBOOK_PAYMENT, ORDER_PAYMENT,
---      PARTNER_POSITION): добавлен фильтр удаленных записей — в Spark
---      spark_wrapper.read(..., keys_for_incremental_load) делает .filter("_deleted = false")
---   2. ROW_NUMBER в payment: payment_number DESC NULLS LAST (в Spark NULL при DESC в конце,
---      в Vertica — в начале)
---   3. transaction_number::!INT — как CAST в Spark: нечисловое значение -> NULL, а не ошибка
---   4. Таблица создается по DDL из spark.write (типы, ORDER BY, PARTITION BY)
---   5. Убран неиспользуемый источник ERP_SALES_DEPARTMENT
--- =====================================================================
-
-DROP TABLE IF EXISTS sandbox_analytics.P_GN_ORDER;
-
+--P_GN_ORDER
 WITH
--- =====================================================================
--- Источник: init_inc_load_S3_ERP_SALE_ORDER -> s3_object = SALE_ORDER
--- В S3 попадают только строки с _processed_at IS NOT NULL (grouping_column),
--- в Spark после инкремента — только _deleted = false
--- =====================================================================
 erp_order AS (
     SELECT
         eo.sale_number,
@@ -63,9 +38,6 @@ erp_order AS (
         AND eo._deleted IS NOT TRUE
         AND eop._deleted IS NOT TRUE
 ),
--- =====================================================================
--- Источник: reload_S3_ERP_SITE_LINK_ORDER -> s3_object = SITE_LINK_ORDER
--- =====================================================================
 erp_site_link_order AS (
     SELECT
         eso.id,
@@ -84,9 +56,6 @@ erp_site_link_order AS (
     WHERE
         esol._deleted IS NOT TRUE
 ),
--- =====================================================================
--- Источник: init_inc_load_S3_ERP_CASHBOOK_PAYMENT -> CASHBOOK_PAYMENT
--- =====================================================================
 erp_cashbook_payment AS (
     SELECT
         sale_number,
@@ -98,10 +67,6 @@ erp_cashbook_payment AS (
         _processed_at IS NOT NULL
         AND _deleted = FALSE
 ),
--- =====================================================================
--- Источник: init_inc_load_S3_ERP_ORDER_PAYMENT -> ORDER_PAYMENT
--- sale_position = '00' перенесено из условия INNER JOIN
--- =====================================================================
 erp_order_payment AS (
     SELECT
         sale_number,
@@ -113,9 +78,6 @@ erp_order_payment AS (
         AND _deleted = FALSE
         AND sale_position = '00'
 ),
--- =====================================================================
--- Источник: reload_S3_ERP_SALES_ORGANIZATION -> SALES_ORGANIZATION
--- =====================================================================
 erp_sales_organization AS (
     SELECT
         sales_organization,
@@ -124,9 +86,6 @@ erp_sales_organization AS (
     WHERE
         _deleted IS NOT TRUE
 ),
--- =====================================================================
--- Источник: reload_S3_ERP_USER_MOTIVATION -> USER_MOTIVATION
--- =====================================================================
 erp_user_motivation AS (
     SELECT
         sale_number,
@@ -135,10 +94,6 @@ erp_user_motivation AS (
     WHERE
         _deleted IS NOT TRUE
 ),
--- =====================================================================
--- Источник: init_inc_load_S3_ERP_PARTNER_POSITION -> PARTNER_POSITION
--- partner_role = 'SH' перенесено из условия LEFT JOIN (фильтр правой таблицы)
--- =====================================================================
 erp_partner_position AS (
     SELECT
         document_number,
@@ -149,9 +104,6 @@ erp_partner_position AS (
         AND _deleted = FALSE
         AND partner_role = 'SH'
 ),
--- =====================================================================
--- Логика Spark
--- =====================================================================
 order_header AS (
     SELECT DISTINCT
         created_at AS load_dt,
@@ -279,5 +231,3 @@ WHERE
     oh.sale_doc_kind <> 'AG'
     AND oh.sale_doc_dype IN ('B', 'C', 'H', 'K')
     AND (eso.business <> 'ENRG' OR eso.business IS NULL)
-    -- ограничение периода для сверки (только основная таблица, oh2 — без фильтра)
-    AND oh.load_dt >= '2026-09-01'::TIMESTAMP;
