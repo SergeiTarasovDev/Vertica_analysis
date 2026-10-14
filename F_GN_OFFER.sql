@@ -1,19 +1,4 @@
-WITH
--- =====================================================================
--- Источник: init_inc_load_S3_ERP_SALE_ORDER → s3_object = "SALE_ORDER"
--- Spark: spark.read_with_filter("SALE_ORDER", column_for_filter="created_at",
---                               keys_for_incremental_load=['sale_number','sale_position'])
--- DAG: ERP_ORDER ⨝ ERP_ORDER_POSITIONS, created_at >= '2018-01-01'
--- =====================================================================
-
-
--- можно сравнивать
-sandbox_analytics.F_GN_OFFER (загружена с 1 сентября 2026)
-и
-prepared.F_GN_OFFER
-
-CREATE TABLE sandbox_analytics.F_GN_OFFER AS
---EXPLAIN
+--F_GN_OFFER
 WITH
 erp_order AS (
     SELECT
@@ -71,44 +56,24 @@ erp_order AS (
               ELSE eop._processed_at
           END IS NOT NULL
 ),
--- =====================================================================
--- Источник: init_inc_load_S3_ERP_ORDER_PAYMENT → s3_object = "ORDER_PAYMENT"
--- DAG: SELECT * FROM public.ERP_ORDER_PAYMENT
--- =====================================================================
 erp_order_payment AS (
     SELECT * FROM public.ERP_ORDER_PAYMENT
     WHERE _processed_at IS NOT NULL
     AND _deleted IS NOT TRUE
 ),
--- =====================================================================
--- Источник: reload_S3_ERP_SALES_ORGANIZATION → s3_object = "SALES_ORGANIZATION"
--- DAG: SELECT * FROM public.ERP_SALES_ORGANIZATION WHERE _deleted IS NOT TRUE
--- =====================================================================
 erp_sales_organization AS (
     SELECT * FROM public.ERP_SALES_ORGANIZATION
     WHERE _deleted IS NOT TRUE
 ),
--- =====================================================================
--- Источник: init_inc_load_S3_ERP_PARTNER_POSITION → s3_object = "PARTNER_POSITION"
--- DAG: SELECT * FROM public.ERP_PARTNER_POSITION
--- =====================================================================
 erp_partner_position AS (
     SELECT * FROM public.ERP_PARTNER_POSITION
     WHERE _processed_at IS NOT NULL
     AND _deleted IS NOT TRUE
 ),
--- =====================================================================
--- Источник: reload_S3_ERP_USER_MOTIVATION → s3_object = "USER_MOTIVATION"
--- DAG: SELECT * FROM public.ERP_USER_MOTIVATION WHERE _deleted IS NOT TRUE
--- =====================================================================
 erp_user_motivation AS (
     SELECT * FROM public.ERP_USER_MOTIVATION
     WHERE _deleted IS NOT TRUE
 ),
--- =====================================================================
--- Источник: init_inc_load_S3_ERP_INVOICE → s3_object = "INVOICE"
--- DAG: ERP_INVOICE ⨝ ERP_INVOICE_POSITIONS
--- =====================================================================
 erp_invoice AS (
     SELECT
         ei.invoice_number,
@@ -171,10 +136,6 @@ erp_invoice AS (
           END IS NOT NULL
       AND (ei._deleted IS TRUE OR eip._deleted IS TRUE) IS NOT TRUE
 ),
--- =====================================================================
--- Источник: reload_S3_ERP_SITE_LINK_ORDER → s3_object = "SITE_LINK_ORDER"
--- DAG: ERP_SITE_ORDER_LINK ⨝ ERP_SITE_ORDER ⨝ ERP_SITE_ORDER_DELIVERIES
--- =====================================================================
 erp_site_link_order AS (
     SELECT
         eso.id,
@@ -185,43 +146,21 @@ erp_site_link_order AS (
        AND eso._deleted IS NOT TRUE
     WHERE esol._deleted IS NOT TRUE
 ),
--- =====================================================================
--- Источник: reload_S3_ERP_SALES_DEPARTMENT → s3_object = "SALES_DEPARTMENT"
--- =====================================================================
 erp_sales_department AS (
     SELECT * FROM public.ERP_SALES_DEPARTMENT
     WHERE _deleted IS NOT TRUE
 ),
--- =====================================================================
--- Источник: reload_S3_P_GN_ORD_SALES_DEPT_SUB → s3_object = "P_GN_ORD_SALES_DEPT_SUB"
--- DAG: SELECT * FROM preparation.P_GN_ORD_SALES_DEPT_SUB
--- =====================================================================
 p_gn_ord_sales_dept_sub AS (
     SELECT * FROM preparation.P_GN_ORD_SALES_DEPT_SUB
 ),
--- =====================================================================
--- I_GN_DEBITOR_EXCEPTIONS — подготовка (подтверждено)
--- =====================================================================
 i_gn_debitor_exceptions AS (
     SELECT gn_debitor_cd FROM preparation.I_GN_DEBITOR_EXCEPTIONS
 ),
--- =====================================================================
--- Spark view FILTERED_INVOICE
--- =====================================================================
 filtered_invoice AS (
     SELECT *
     FROM erp_invoice
     WHERE client_number NOT IN (SELECT gn_debitor_cd FROM i_gn_debitor_exceptions)
 ),
--- =====================================================================
--- Spark view OFFERS
--- Отличия от FGnOrder:
---   * sale_doc_kind = 'AG'  (а не <> 'AG')
---   * join ERP_ORDER_PAYMENT по sale_position = sale_position (а не '00')
---   * incoterms: COALESCE-логика
---   * нет hdr_samp_author / hdr_samp_cd / hdr_samp_doc_kind
---   * фильтр eso.business <> 'ENRG' без OR IS NULL
--- =====================================================================
 offers AS (
     SELECT
         eo.created_at                AS ordr_dt,
@@ -288,21 +227,11 @@ offers AS (
       )
       AND eso.business <> 'ENRG'
 ),
--- =====================================================================
--- Spark view SITE_ORDER_LINK_PREP
--- =====================================================================
 site_order_link_prep AS (
     SELECT id, erp_sale_number
     FROM erp_site_link_order
     GROUP BY id, erp_sale_number
 ),
--- =====================================================================
--- Spark view CHANGE_SALE_DEP_RETURN
--- Отличия от FGnOrder: используется o.sale_department NOT IN ('1099','1098'),
--- BOOL_OR(...) заменён на MAX(...) OVER (PARTITION BY ...)  — эквивалентно.
--- ВНИМАНИЕ: join esol1 ON esol1.erp_sale_number = o.sale_position
--- (в FGnOrder было по o.sample_number). Оставлено как в источнике.
--- =====================================================================
 change_sale_dep_return AS (
     SELECT
         CASE
@@ -336,9 +265,6 @@ change_sale_dep_return AS (
     LEFT JOIN site_order_link_prep esol2
         ON esol2.erp_sale_number = i_p.trade_doc_number
 ),
--- =====================================================================
--- Spark view OFFERS_WITH_NEED_FORMATS
--- =====================================================================
 offers_with_need_formats AS (
     SELECT
         s.*,
@@ -350,9 +276,6 @@ offers_with_need_formats AS (
     LEFT JOIN erp_sales_department esd2
         ON esd2.sales_department = s.sales_department_imkc
 ),
--- =====================================================================
--- Spark view PREP_OFFERS
--- =====================================================================
 prep_offers AS (
     SELECT
         ordr_dt,
@@ -403,9 +326,6 @@ prep_offers AS (
         END AS sd_flag
     FROM offers_with_need_formats
 )
--- =====================================================================
--- Финальный SELECT — то, что Spark пишет в prepared.F_GN_OFFER
--- =====================================================================
 SELECT
     po.ordr_dt AS load_dt,
     COALESCE(d1.gn_grade_type_id, -1)          AS gn_grade_type_id,
@@ -484,4 +404,4 @@ LEFT JOIN prepared.D_GN_BUSINESS_FORMAT d20
     ON d20.gn_business_format_cd = po.bsn_frmt
 LEFT JOIN prepared.D_GN_BUSINESS_FORMAT d21
     ON d21.gn_business_format_cd = po.bsn_frmt_imkc
-WHERE load_dt >= '2026-09-01'::DATE
+;

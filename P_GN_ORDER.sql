@@ -1,17 +1,29 @@
+-- =====================================================================
+-- P_GN_ORDER: перевод Spark-расчета (dmt_spark/src/p-gn-order.py) в Vertica SQL
+-- Vertica 11.0.1
+--
+-- Для сверки:
+--   sandbox_analytics.P_GN_ORDER  (загружена с 1 сентября 2026)
+--   preparation.P_GN_ORDER        (Spark)
+--
+-- Исправления относительно P_GN_ORDER.txt:
+--   1. Инкрементальные источники (SALE_ORDER, CASHBOOK_PAYMENT, ORDER_PAYMENT,
+--      PARTNER_POSITION): добавлен фильтр удаленных записей — в Spark
+--      spark_wrapper.read(..., keys_for_incremental_load) делает .filter("_deleted = false")
+--   2. ROW_NUMBER в payment: payment_number DESC NULLS LAST (в Spark NULL при DESC в конце,
+--      в Vertica — в начале)
+--   3. transaction_number::!INT — как CAST в Spark: нечисловое значение -> NULL, а не ошибка
+--   4. Таблица создается по DDL из spark.write (типы, ORDER BY, PARTITION BY)
+--   5. Убран неиспользуемый источник ERP_SALES_DEPARTMENT
+-- =====================================================================
 
+DROP TABLE IF EXISTS sandbox_analytics.P_GN_ORDER;
 
--- можно сравнивать
-sandbox_analytics.P_GN_ORDER (загружена с 1 сентября 2026)
-и
-preparation.P_GN_ORDER
-
-CREATE TABLE sandbox_analytics.P_GN_ORDER AS
---EXPLAIN
 WITH
 -- =====================================================================
--- Источник: init_inc_load_S3_ERP_SALE_ORDER  →  s3_object = SALE_ORDER
--- В Spark: spark.read("SALE_ORDER", keys_for_incremental_load=[...])
---          → temp view ERP_ORDER
+-- Источник: init_inc_load_S3_ERP_SALE_ORDER -> s3_object = SALE_ORDER
+-- В S3 попадают только строки с _processed_at IS NOT NULL (grouping_column),
+-- в Spark после инкремента — только _deleted = false
 -- =====================================================================
 erp_order AS (
     SELECT
@@ -37,50 +49,22 @@ erp_order AS (
         eo.project_id,
         eo.cash_payment_amount,
         eo.card_payment_amount,
-        eo.promo_action,
-        eop.sale_position,
-        eop.sample_number         AS sample_number_position,
-        eop.sample_position,
-        eop.return_type           AS return_type_position,
-        eop.created_at            AS created_at_position,
-        eop.grade_type,
-        eop.plant,
-        eop.warehouse,
-        eop.product_item,
-        eop.substitution_product,
-        eop.author                AS author_position,
-        eop.net_cost,
-        eop.calculate_cost,
-        eop.tax,
-        eop.rejection_reason      AS rejection_reason_position,
-        eop.position_type,
-        eop.mark_down_flg,
-        eop.gtr_number,
-        eop.fact_count,
-        eop.fact_count_store,
-        eop.guid,
-        CASE
-            WHEN eo._processed_at > eop._processed_at
-            THEN eo._processed_at
-            ELSE eop._processed_at
-        END                       AS _processed_at,
-        CASE
-            WHEN eo._deleted IS TRUE OR eop._deleted IS TRUE
-            THEN TRUE
-            ELSE FALSE
-        END                       AS _deleted
+        eo.promo_action
     FROM public.ERP_ORDER eo
     LEFT JOIN public.ERP_ORDER_POSITIONS eop
         ON eop.sale_number = eo.sale_number
-    WHERE eo.created_at >= '2018-01-01'
-    AND CASE
-              WHEN eo._processed_at > eop._processed_at THEN eo._processed_at
-              ELSE eop._processed_at
-          END IS NOT NULL
+    WHERE
+        eo.created_at >= '2018-01-01'
+        AND CASE
+                WHEN eo._processed_at > eop._processed_at
+                THEN eo._processed_at
+                ELSE eop._processed_at
+            END IS NOT NULL
+        AND eo._deleted IS NOT TRUE
+        AND eop._deleted IS NOT TRUE
 ),
 -- =====================================================================
--- Источник: reload_S3_ERP_SITE_LINK_ORDER  →  s3_object = SITE_LINK_ORDER
--- В Spark: spark.read("SITE_LINK_ORDER") → temp view ERP_SITE_LINK_ORDER
+-- Источник: reload_S3_ERP_SITE_LINK_ORDER -> s3_object = SITE_LINK_ORDER
 -- =====================================================================
 erp_site_link_order AS (
     SELECT
@@ -93,67 +77,80 @@ erp_site_link_order AS (
     FROM public.ERP_SITE_ORDER_LINK esol
     LEFT JOIN public.ERP_SITE_ORDER eso
         ON eso.id = esol.id
-       AND eso._deleted IS NOT TRUE
+        AND eso._deleted IS NOT TRUE
     LEFT JOIN public.ERP_SITE_ORDER_DELIVERIES del
         ON del.order_id = eso.id
-       AND del._deleted IS NOT TRUE
-    WHERE esol._deleted IS NOT TRUE
+        AND del._deleted IS NOT TRUE
+    WHERE
+        esol._deleted IS NOT TRUE
 ),
 -- =====================================================================
--- Источник: init_inc_load_S3_ERP_CASHBOOK_PAYMENT  →  CASHBOOK_PAYMENT
--- В Spark: spark.read("CASHBOOK_PAYMENT", keys_for_incremental_load=[...])
---          → temp view ERP_CASHBOOK_PAYMENT
+-- Источник: init_inc_load_S3_ERP_CASHBOOK_PAYMENT -> CASHBOOK_PAYMENT
 -- =====================================================================
 erp_cashbook_payment AS (
-    SELECT * FROM public.ERP_PAYMENT_POSITION
-    WHERE _processed_at IS NOT NULL
+    SELECT
+        sale_number,
+        cashbox,
+        transaction_number,
+        payment_number
+    FROM public.ERP_PAYMENT_POSITION
+    WHERE
+        _processed_at IS NOT NULL
+        AND _deleted = FALSE
 ),
 -- =====================================================================
--- Источник: init_inc_load_S3_ERP_ORDER_PAYMENT  →  ORDER_PAYMENT
--- В Spark: spark.read("ORDER_PAYMENT", keys_for_incremental_load=[...])
---          → temp view ERP_ORDER_PAYMENT
+-- Источник: init_inc_load_S3_ERP_ORDER_PAYMENT -> ORDER_PAYMENT
+-- sale_position = '00' перенесено из условия INNER JOIN
 -- =====================================================================
 erp_order_payment AS (
-    SELECT * FROM public.ERP_ORDER_PAYMENT
-    WHERE _processed_at IS NOT NULL
-    and sale_position = '00'
+    SELECT
+        sale_number,
+        contract,
+        shipping_payment_method
+    FROM public.ERP_ORDER_PAYMENT
+    WHERE
+        _processed_at IS NOT NULL
+        AND _deleted = FALSE
+        AND sale_position = '00'
 ),
 -- =====================================================================
--- Источник: reload_S3_ERP_SALES_ORGANIZATION  →  SALES_ORGANIZATION
--- В Spark: spark.read("SALES_ORGANIZATION") → temp view ERP_SALES_ORGANIZATION
+-- Источник: reload_S3_ERP_SALES_ORGANIZATION -> SALES_ORGANIZATION
 -- =====================================================================
 erp_sales_organization AS (
-    SELECT * FROM public.ERP_SALES_ORGANIZATION
-    WHERE _deleted IS NOT TRUE
+    SELECT
+        sales_organization,
+        business
+    FROM public.ERP_SALES_ORGANIZATION
+    WHERE
+        _deleted IS NOT TRUE
 ),
 -- =====================================================================
--- Источник: reload_S3_ERP_USER_MOTIVATION  →  USER_MOTIVATION
--- В Spark: spark.read("USER_MOTIVATION") → temp view ERP_USER_MOTIVATION
+-- Источник: reload_S3_ERP_USER_MOTIVATION -> USER_MOTIVATION
 -- =====================================================================
 erp_user_motivation AS (
-    SELECT * FROM public.ERP_USER_MOTIVATION
-    WHERE _deleted IS NOT TRUE
+    SELECT
+        sale_number,
+        user_name
+    FROM public.ERP_USER_MOTIVATION
+    WHERE
+        _deleted IS NOT TRUE
 ),
 -- =====================================================================
--- Источник: init_inc_load_S3_ERP_PARTNER_POSITION  →  PARTNER_POSITION
--- В Spark: spark.read("PARTNER_POSITION", keys_for_incremental_load=[...])
---          → temp view ERP_PARTNER_POSITION
+-- Источник: init_inc_load_S3_ERP_PARTNER_POSITION -> PARTNER_POSITION
+-- partner_role = 'SH' перенесено из условия LEFT JOIN (фильтр правой таблицы)
 -- =====================================================================
 erp_partner_position AS (
-    SELECT * FROM public.ERP_PARTNER_POSITION
-    WHERE _processed_at IS NOT NULL
-    and partner_role = 'SH'
+    SELECT
+        document_number,
+        debitor
+    FROM public.ERP_PARTNER_POSITION
+    WHERE
+        _processed_at IS NOT NULL
+        AND _deleted = FALSE
+        AND partner_role = 'SH'
 ),
 -- =====================================================================
--- Источник: reload_S3_ERP_SALES_DEPARTMENT  →  SALES_DEPARTMENT
--- В Spark читается, но в финальном запросе НЕ используется
--- =====================================================================
-erp_sales_department AS (
-    SELECT * FROM public.ERP_SALES_DEPARTMENT
-    WHERE _deleted IS NOT TRUE
-),
--- =====================================================================
--- Далее — исходная логика Spark (views и финальный SELECT)
+-- Логика Spark
 -- =====================================================================
 order_header AS (
     SELECT DISTINCT
@@ -189,28 +186,31 @@ delivery_data AS (
         internet_order_number,
         payment_type,
         CASE
-            WHEN express_pickup IS TRUE THEN 'Да'
+            WHEN express_pickup IS TRUE
+            THEN 'Да'
             ELSE 'Нет'
         END AS express_pickup
     FROM erp_site_link_order
-    WHERE business <> 'ENRG'
+    WHERE
+        business <> 'ENRG'
 ),
 payment AS (
     SELECT
         sale_number,
         cashbox,
-        CAST(transaction_number AS INT) AS transaction_number,
+        transaction_number::!INT AS transaction_number,
         ROW_NUMBER() OVER (
             PARTITION BY sale_number
-            ORDER BY payment_number DESC
+            ORDER BY payment_number DESC NULLS LAST
         ) AS payment_rank
     FROM erp_cashbook_payment
-    WHERE sale_number IS NOT NULL
-      AND (
-            CAST(transaction_number AS INT) IN (30, 31, 4, 5, 100, 101)
+    WHERE
+        sale_number IS NOT NULL
+        AND (
+            transaction_number::!INT IN (30, 31, 4, 5, 100, 101)
             OR cashbox IN ('9851', '9852', '9853', '9854')
-          )
-),
+        )
+)
 fnl AS (
 	SELECT
 	    oh.load_dt,
@@ -243,43 +243,41 @@ fnl AS (
 	    epp.debitor        AS debitor_sale,
 	    oh.promo_action,
 	    oh.discount_card,
-	    CASE
-	        WHEN p.cashbox = '9851' THEN 'Оплата по ссылке'
-	        WHEN p.cashbox = '9852' THEN 'По СБП/QR-динамическому'
-	        WHEN p.cashbox = '9853' THEN 'Оплата частями'
-	        WHEN p.cashbox = '9854' THEN 'СБП B2B'
-	        WHEN p.transaction_number IN (4, 5)     THEN 'Оплата наличными'
-	        WHEN p.transaction_number IN (30, 31)   THEN 'Оплата по терминалу'
-	        WHEN p.transaction_number IN (100, 101) THEN 'Оплата по QR-табличке'
-	        WHEN dd.payment_type = 'invoice'        THEN 'Cписанием со счета (ЮЛ)'
-	    END AS payment_type,
-	    oh.order_source,
-	    CASE
-	        WHEN eop.shipping_payment_method = 'PT01' THEN TRUE
-	        ELSE FALSE
-	    END AS local_payment_flag
-	FROM order_header oh
-	INNER JOIN erp_order_payment eop
-	    ON eop.sale_number = oh.sale_number
-	   --AND eop.sale_position = '00'
-	LEFT JOIN order_header oh2
-	    ON oh2.sale_number = oh.sample_number
-	LEFT JOIN delivery_data dd
-	    ON dd.erp_sale_number = oh.sale_number
-	LEFT JOIN erp_sales_organization eso
-	    ON eso.sales_organization = oh.sale_org
-	LEFT JOIN erp_user_motivation eum
-	    ON eum.sale_number = oh.sample_number
-	LEFT JOIN erp_partner_position epp
-	    ON epp.document_number = oh.sale_number
-	  -- AND epp.partner_role = 'SH'
-	LEFT JOIN payment p
-	    ON p.sale_number = oh.sale_number
-	   AND p.payment_rank = 1
-	WHERE oh.sale_doc_kind <> 'AG'
-	  AND oh.sale_doc_dype IN ('B', 'C', 'H', 'K')
-	  AND (eso.business <> 'ENRG' OR eso.business IS NULL)
-  )
-  SELECT * FROM fnl
-WHERE load_dt >= '2026-09-01'::DATE
---ORDER BY oh.sale_number;
+    (CASE
+        WHEN p.cashbox = '9851'                 THEN 'Оплата по ссылке'
+        WHEN p.cashbox = '9852'                 THEN 'По СБП/QR-динамическому'
+        WHEN p.cashbox = '9853'                 THEN 'Оплата частями'
+        WHEN p.cashbox = '9854'                 THEN 'СБП B2B'
+        WHEN p.transaction_number IN (4, 5)     THEN 'Оплата наличными'
+        WHEN p.transaction_number IN (30, 31)   THEN 'Оплата по терминалу'
+        WHEN p.transaction_number IN (100, 101) THEN 'Оплата по QR-табличке'
+        WHEN dd.payment_type = 'invoice'        THEN 'Cписанием со счета (ЮЛ)'
+    END)                   AS payment_type,
+    oh.order_source        AS order_source,
+    CASE
+        WHEN eop.shipping_payment_method = 'PT01'
+        THEN TRUE
+        ELSE FALSE
+    END                                 AS local_payment_flag
+FROM order_header oh
+INNER JOIN erp_order_payment eop
+    ON eop.sale_number = oh.sale_number
+LEFT JOIN order_header oh2
+    ON oh2.sale_number = oh.sample_number
+LEFT JOIN delivery_data dd
+    ON dd.erp_sale_number = oh.sale_number
+LEFT JOIN erp_sales_organization eso
+    ON eso.sales_organization = oh.sale_org
+LEFT JOIN erp_user_motivation eum
+    ON eum.sale_number = oh.sample_number
+LEFT JOIN erp_partner_position epp
+    ON epp.document_number = oh.sale_number
+LEFT JOIN payment p
+    ON p.sale_number = oh.sale_number
+    AND p.payment_rank = 1
+WHERE
+    oh.sale_doc_kind <> 'AG'
+    AND oh.sale_doc_dype IN ('B', 'C', 'H', 'K')
+    AND (eso.business <> 'ENRG' OR eso.business IS NULL)
+    -- ограничение периода для сверки (только основная таблица, oh2 — без фильтра)
+    AND oh.load_dt >= '2026-09-01'::TIMESTAMP;
