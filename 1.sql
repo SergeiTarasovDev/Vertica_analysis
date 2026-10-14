@@ -1,74 +1,82 @@
-
--- можно сравнивать
-sandbox_analytics.P_GN_INV_SALES_DEPT_SUB (загружена с 1 сентября 2026)
-и
-preparation.P_GN_INV_SALES_DEPT_SUB
-
-SELECT * FROM sandbox_analytics.P_GN_INV_SALES_DEPT_SUB
-
-CREATE TABLE sandbox_analytics.P_GN_INV_SALES_DEPT_SUB AS
 WITH
 invoice AS (
     SELECT
-            ei.invoice_number,
-            ei.invoice_date,
-            ei.sales_org,
-            ei.sales_channel,
-            ei.price_condition_number,
-            ei.sales_doc_type,
-            ei.company_code,
-            ei.invoice_kind,
-            ei.created_by,
-            ei.payer LIKE 'T%' AS payer_startwith_t_flg,
-            ei.payer,
-            ei.client_number,
-            ei.incoterms,
-            ei.reversal_document_number,
-            ei.price_list,
-            ei.invoice_reference_number,
-            ei.created_at,
-            eip.position_number,
-            eip.trade_doc_number,
-            eip.trade_doc_pos,
-            eip.sales_department,
-            eip.mvp,
-            eip.sample_doc_number,
-            eip.sample_doc_pos,
-            eip.product_item,
-            eip.plant,
-            eip.return_type,
-            eip.net_cost,
-            eip.nds_proceeds,
-            eip.grade_type,
-            eip.sale_uom,
-            eip.base_uom,
-            eip.position_type,
-            eip.shipment_point,
-            eip.type_of_payment,
-            eip.condition_subtotal,
-            eip.batch_number,
-            eip.warehouse,
-            eip.calculate_cost,
-            eip.fact_count,
-            eip.fact_count_store,
-            eip.sale_price,
-        eip.sale_price_with_disc,
-            CASE
-                WHEN ei._processed_at > eip._processed_at
-                THEN ei._processed_at
-                ELSE eip._processed_at
-            END AS _processed_at,
-            CASE
-                WHEN ei._deleted IS TRUE OR eip._deleted IS TRUE
-                THEN TRUE
-                ELSE FALSE
-            END AS _deleted
-    FROM public.ERP_INVOICE AS ei
-    LEFT JOIN public.ERP_INVOICE_POSITIONS AS eip
-            ON ei.invoice_number = eip.invoice_number
-	WHERE
-		ei."_deleted" IS NOT TRUE
-		AND eip."_deleted" IS NOT TRUE
+                ei.invoice_number,
+                ei.invoice_date,
+                ei.sales_org,
+                ei.sales_channel,
+                ei.price_condition_number,
+                ei.sales_doc_type,
+                ei.company_code,
+                ei.invoice_kind,
+                ei.created_by,
+                ei.payer LIKE 'T%' AS payer_startwith_t_flg,
+                ei.payer,
+                ei.client_number,
+                ei.incoterms,
+                ei.reversal_document_number,
+                ei.price_list,
+                ei.invoice_reference_number,
+                ei.created_at,
+                eip.position_number,
+                eip.trade_doc_number,
+                eip.trade_doc_pos,
+                eip.sales_department,
+                eip.mvp,
+                eip.sample_doc_number,
+                eip.sample_doc_pos,
+                eip.product_item,
+                eip.plant,
+                eip.return_type,
+                eip.net_cost,
+                eip.nds_proceeds,
+                eip.grade_type,
+                eip.sale_uom,
+                eip.base_uom,
+                eip.position_type,
+                eip.shipment_point,
+                eip.type_of_payment,
+                eip.condition_subtotal,
+                eip.batch_number,
+                eip.warehouse,
+                eip.calculate_cost,
+                eip.fact_count,
+                eip.fact_count_store,
+                eip.sale_price,
+            eip.sale_price_with_disc,
+                CASE
+                    WHEN ei._processed_at > eip._processed_at
+                    THEN ei._processed_at
+                    ELSE eip._processed_at
+                END AS _processed_at,
+                CASE
+                    WHEN ei._deleted IS TRUE OR eip._deleted IS TRUE
+                    THEN TRUE
+                    ELSE FALSE
+                END AS _deleted
+        FROM public.ERP_INVOICE AS ei
+        LEFT JOIN public.ERP_INVOICE_POSITIONS AS eip
+                ON ei.invoice_number = eip.invoice_number
+),
+-- ИСПРАВЛЕНО (B): дедупликация инкремента — оставляем ПОСЛЕДНЮЮ версию по
+-- ключам датасета INVOICE (keys_for_incremental_load=['invoice_number','position_number']).
+invoice_latest AS (
+    SELECT *
+        FROM invoice
+        QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY invoice_number, position_number
+                    ORDER BY _processed_at DESC NULLS FIRST
+                ) = 1
+),
+-- ИСПРАВЛЕНО (A): отбрасываем удалённые строки (удалена шапка или позиция).
+-- ПОРЯДОК ВАЖЕН: сначала дедуп (B), потом фильтр _deleted.
+-- Если сделать наоборот, "воскресают" старые живые версии позиций, у которых
+-- последняя версия помечена удалённой: в Spark такой ключ исчезает целиком,
+-- а в SQL (фильтр без дедупа) остаётся -> лишние строки в SQL.
+invoice_actual AS (
+    SELECT *
+        FROM invoice_latest
+        WHERE _deleted IS NOT TRUE
 ),
 sale_order AS (
     SELECT
@@ -130,10 +138,23 @@ sale_order AS (
             public.ERP_ORDER eo
         LEFT JOIN public.ERP_ORDER_POSITIONS eop
             ON eop.sale_number = eo.sale_number
-	WHERE
-		eo."_deleted" IS NOT TRUE
-		AND eop."_deleted" IS NOT TRUE
-		AND eo.created_at >= TIMESTAMP '2026-09-01 00:00:00'
+),
+-- ИСПРАВЛЕНО (B): дедупликация инкремента по ключам датасета SALE_ORDER
+-- (keys_for_incremental_load=['sale_number','sale_position']).
+sale_order_latest AS (
+    SELECT *
+        FROM sale_order
+        QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY sale_number, sale_position
+                    ORDER BY _processed_at DESC NULLS FIRST
+                ) = 1
+),
+-- ИСПРАВЛЕНО (A): отбрасываем удалённые строки (удалена шапка заказа или позиция).
+-- См. комментарий про порядок "дедуп -> фильтр" у invoice_actual.
+sale_order_actual AS (
+    SELECT *
+        FROM sale_order_latest
+        WHERE _deleted IS NOT TRUE
 ),
 erp_site_link_order AS (
     SELECT
@@ -159,7 +180,7 @@ i_gn_debitor_exceptions AS (
 ),
 filtered_invoice AS (
     SELECT *
-        FROM invoice
+        FROM invoice_actual
         WHERE client_number NOT IN (SELECT gn_debitor_cd FROM i_gn_debitor_exceptions)
 ),
 erp_invoice AS (
@@ -180,7 +201,7 @@ erp_order AS (
             sale_position,
             sample_number_position AS sample_number,
             sample_position
-        FROM sale_order
+        FROM sale_order_actual
 ),
 order_first AS (
     SELECT
@@ -237,39 +258,37 @@ SELECT
     site_id2::INTEGER AS site_id2,
     site_id3::INTEGER AS site_id3
 FROM (
-	SELECT
-	            oo2.load_dt,
-	            oo2.sale_doc_kind,
-	            oo2.order_sale_number,
-	            oo2.order_sale_position,
-	            oo2.sales_department,
-	            oo2.sales_channel,
-	            oo2.sales_org,
-	            oo2.site_id1,
-	            oo2.site_id2,
-	            esol3.id AS site_id3
-	        FROM order_second oo2
-	        LEFT JOIN erp_invoice ip2
-	            ON oo2.sn2 = ip2.invoice_number
-	            AND oo2.sp2 = ip2.position_number
-	        LEFT JOIN erp_site_link_order esol3
-	            ON esol3.erp_sale_number = ip2.trade_doc_number
-	        UNION ALL
-	        SELECT
-	            eo.load_dt,
-	            eo.sale_doc_kind,
-	            eo.sale_number AS order_sale_number,
-	            eo.sale_position AS order_sale_position,
-	            NULL AS sales_department,
-	            NULL AS sales_channel,
-	            NULL AS sales_org,
-	            NULL AS site_id1,
-	            NULL AS site_id2,
-	            NULL AS site_id3
-	        FROM erp_order eo
-	        WHERE
-	            eo.sample_number IS NULL
-	            AND eo.sample_position IS NULL
-	) AS res
-WHERE load_dt >= '20260901'
-
+SELECT
+            oo2.load_dt,
+            oo2.sale_doc_kind,
+            oo2.order_sale_number,
+            oo2.order_sale_position,
+            oo2.sales_department,
+            oo2.sales_channel,
+            oo2.sales_org,
+            oo2.site_id1,
+            oo2.site_id2,
+            esol3.id AS site_id3
+        FROM order_second oo2
+        LEFT JOIN erp_invoice ip2
+            ON oo2.sn2 = ip2.invoice_number
+            AND oo2.sp2 = ip2.position_number
+        LEFT JOIN erp_site_link_order esol3
+            ON esol3.erp_sale_number = ip2.trade_doc_number
+        UNION ALL
+        SELECT
+            eo.load_dt,
+            eo.sale_doc_kind,
+            eo.sale_number AS order_sale_number,
+            eo.sale_position AS order_sale_position,
+            NULL AS sales_department,
+            NULL AS sales_channel,
+            NULL AS sales_org,
+            NULL AS site_id1,
+            NULL AS site_id2,
+            NULL AS site_id3
+        FROM erp_order eo
+        WHERE
+            eo.sample_number IS NULL
+            AND eo.sample_position IS NULL
+) AS result;
