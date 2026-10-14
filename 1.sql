@@ -1,49 +1,14 @@
--- ============================================================================
--- P_GN_INV_SALES_DEPT_SUB  (SQL-порт p-gn-inv-sales-dept-sub.py)
--- Версия 3 — синтаксис, совместимый с Vertica 11.0.1.
---
--- ЧЕМ ОТЛИЧАЕТСЯ ОТ v2 (там файл не запускался):
---   1) убран QUALIFY — дедупликация сделана через производную таблицу,
---      ROW_NUMBER() в списке выборки и WHERE rn = 1;
---   2) убран NULLS FIRST — порядок NULL-ов задан выражением
---      CASE WHEN _processed_at IS NULL THEN 1 ELSE 0 END в ORDER BY
---      аналитической функции (без ключевых слов NULLS FIRST/LAST);
---   3) CTE i_gn_debitor_exceptions возвращён к простому виду, который
---      уже работал (фильтр _deleted без дедупа). Вариант с дедупом
---      оставлен закомментированным: он требует колонки _processed_at,
---      которой в этой таблице может не быть.
---
--- ИСПРАВЛЕНО в v1/v2 (логика):
---   A) восстановлен фильтр "_deleted IS NOT TRUE", который в Spark-версии
---      применяет обёртка spark.read при чтении датасетов INVOICE / SALE_ORDER;
---   B) восстановлена дедупликация инкремента по ключам датасета
---      (INVOICE: invoice_number + position_number,
---       SALE_ORDER: sale_number + sale_position):
---      берём последнюю версию по _processed_at и только потом смотрим _deleted.
---
---   Почему это даёт расхождение в ОБЕ стороны:
---     * "есть в SQL, нет в Spark": у ключа есть старые ЖИВЫЕ версии и
---       последняя УДАЛЁННАЯ. Spark (дедуп -> фильтр) выбрасывает ключ целиком,
---       SQL с одним фильтром оставляет старую живую версию;
---     * "есть в Spark, нет в SQL": I_GN_DEBITOR_EXCEPTIONS используется
---       отрицательно (NOT IN), поэтому расширение списка выкидывает отгрузки,
---       которые Spark оставляет. Дедуп для него оставлен закомментированным —
---       включайте только если в таблице реально есть версии (проверка D4
---       в DIAG_GN_INV_SALES_DEPT_SUB_diff.sql).
---
--- ОСТАЁТСЯ (не менялось):
---   C) erp_site_link_order: join'ы к ERP_SITE_ORDER / ERP_SITE_ORDER_DELIVERIES
---      могут размножать site_id1/2/3;
---   D) sale_order построен LEFT JOIN'ом ОТ шапки ERP_ORDER: "шапки без позиций"
---      уходят во вторую ветку UNION ALL;
---   E) load_dt::DATE и таймзона: created_at::DATE может дать другую дату,
---      чем Spark -> одна и та же отгрузка "лишняя" на одной стороне и
---      "пропавшая" на другой;
---   F) ширины VARCHAR(n) в финальных кастах.
---
--- Логика ядра (order_first / order_second / core / UNION ALL) не менялась.
--- ============================================================================
 
+-- можно сравнивать
+sandbox_analytics.P_GN_INV_SALES_DEPT_SUB (загружена с 1 сентября 2026)
+и
+preparation.P_GN_INV_SALES_DEPT_SUB
+
+SELECT * FROM sandbox_analytics.P_GN_INV_SALES_DEPT_SUB;
+
+DROP TABLE sandbox_analytics.P_GN_INV_SALES_DEPT_SUB;
+
+CREATE TABLE sandbox_analytics.P_GN_INV_SALES_DEPT_SUB AS
 WITH
 invoice AS (
     SELECT
