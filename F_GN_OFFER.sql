@@ -78,6 +78,7 @@ erp_order AS (
 erp_order_payment AS (
     SELECT * FROM public.ERP_ORDER_PAYMENT
     WHERE _processed_at IS NOT NULL
+    AND _deleted IS NOT TRUE
 ),
 -- =====================================================================
 -- Источник: reload_S3_ERP_SALES_ORGANIZATION → s3_object = "SALES_ORGANIZATION"
@@ -94,6 +95,7 @@ erp_sales_organization AS (
 erp_partner_position AS (
     SELECT * FROM public.ERP_PARTNER_POSITION
     WHERE _processed_at IS NOT NULL
+    AND _deleted IS NOT TRUE
 ),
 -- =====================================================================
 -- Источник: reload_S3_ERP_USER_MOTIVATION → s3_object = "USER_MOTIVATION"
@@ -167,6 +169,7 @@ erp_invoice AS (
               WHEN ei._processed_at > eip._processed_at THEN ei._processed_at
               ELSE eip._processed_at
           END IS NOT NULL
+      AND (ei._deleted IS TRUE OR eip._deleted IS TRUE) IS NOT TRUE
 ),
 -- =====================================================================
 -- Источник: reload_S3_ERP_SITE_LINK_ORDER → s3_object = "SITE_LINK_ORDER"
