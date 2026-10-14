@@ -1,3 +1,49 @@
+-- ============================================================================
+-- P_GN_INV_SALES_DEPT_SUB  (SQL-порт p-gn-inv-sales-dept-sub.py)
+-- Версия 3 — синтаксис, совместимый с Vertica 11.0.1.
+--
+-- ЧЕМ ОТЛИЧАЕТСЯ ОТ v2 (там файл не запускался):
+--   1) убран QUALIFY — дедупликация сделана через производную таблицу,
+--      ROW_NUMBER() в списке выборки и WHERE rn = 1;
+--   2) убран NULLS FIRST — порядок NULL-ов задан выражением
+--      CASE WHEN _processed_at IS NULL THEN 1 ELSE 0 END в ORDER BY
+--      аналитической функции (без ключевых слов NULLS FIRST/LAST);
+--   3) CTE i_gn_debitor_exceptions возвращён к простому виду, который
+--      уже работал (фильтр _deleted без дедупа). Вариант с дедупом
+--      оставлен закомментированным: он требует колонки _processed_at,
+--      которой в этой таблице может не быть.
+--
+-- ИСПРАВЛЕНО в v1/v2 (логика):
+--   A) восстановлен фильтр "_deleted IS NOT TRUE", который в Spark-версии
+--      применяет обёртка spark.read при чтении датасетов INVOICE / SALE_ORDER;
+--   B) восстановлена дедупликация инкремента по ключам датасета
+--      (INVOICE: invoice_number + position_number,
+--       SALE_ORDER: sale_number + sale_position):
+--      берём последнюю версию по _processed_at и только потом смотрим _deleted.
+--
+--   Почему это даёт расхождение в ОБЕ стороны:
+--     * "есть в SQL, нет в Spark": у ключа есть старые ЖИВЫЕ версии и
+--       последняя УДАЛЁННАЯ. Spark (дедуп -> фильтр) выбрасывает ключ целиком,
+--       SQL с одним фильтром оставляет старую живую версию;
+--     * "есть в Spark, нет в SQL": I_GN_DEBITOR_EXCEPTIONS используется
+--       отрицательно (NOT IN), поэтому расширение списка выкидывает отгрузки,
+--       которые Spark оставляет. Дедуп для него оставлен закомментированным —
+--       включайте только если в таблице реально есть версии (проверка D4
+--       в DIAG_GN_INV_SALES_DEPT_SUB_diff.sql).
+--
+-- ОСТАЁТСЯ (не менялось):
+--   C) erp_site_link_order: join'ы к ERP_SITE_ORDER / ERP_SITE_ORDER_DELIVERIES
+--      могут размножать site_id1/2/3;
+--   D) sale_order построен LEFT JOIN'ом ОТ шапки ERP_ORDER: "шапки без позиций"
+--      уходят во вторую ветку UNION ALL;
+--   E) load_dt::DATE и таймзона: created_at::DATE может дать другую дату,
+--      чем Spark -> одна и та же отгрузка "лишняя" на одной стороне и
+--      "пропавшая" на другой;
+--   F) ширины VARCHAR(n) в финальных кастах.
+--
+-- Логика ядра (order_first / order_second / core / UNION ALL) не менялась.
+-- ============================================================================
+
 WITH
 invoice AS (
     SELECT
@@ -58,21 +104,24 @@ invoice AS (
         LEFT JOIN public.ERP_INVOICE_POSITIONS AS eip
                 ON ei.invoice_number = eip.invoice_number
 ),
--- ИСПРАВЛЕНО (B): дедупликация инкремента — оставляем ПОСЛЕДНЮЮ версию по
--- ключам датасета INVOICE (keys_for_incremental_load=['invoice_number','position_number']).
+-- ИСПРАВЛЕНО (B): оставляем последнюю версию по ключам датасета INVOICE
+-- (keys_for_incremental_load=['invoice_number','position_number']).
+-- NULL-ы _processed_at идут в конец: сначала признак NULL, потом DESC.
 invoice_latest AS (
     SELECT *
-        FROM invoice
-        QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY invoice_number, position_number
-                    ORDER BY _processed_at DESC NULLS FIRST
-                ) = 1
+        FROM (
+            SELECT invoice.*,
+                   ROW_NUMBER() OVER (
+                                PARTITION BY invoice_number, position_number
+                                ORDER BY CASE WHEN _processed_at IS NULL THEN 1 ELSE 0 END,
+                                         _processed_at DESC
+                            ) AS rn
+                FROM invoice
+        ) ranked
+        WHERE ranked.rn = 1
 ),
 -- ИСПРАВЛЕНО (A): отбрасываем удалённые строки (удалена шапка или позиция).
 -- ПОРЯДОК ВАЖЕН: сначала дедуп (B), потом фильтр _deleted.
--- Если сделать наоборот, "воскресают" старые живые версии позиций, у которых
--- последняя версия помечена удалённой: в Spark такой ключ исчезает целиком,
--- а в SQL (фильтр без дедупа) остаётся -> лишние строки в SQL.
 invoice_actual AS (
     SELECT *
         FROM invoice_latest
@@ -138,16 +187,22 @@ sale_order AS (
             public.ERP_ORDER eo
         LEFT JOIN public.ERP_ORDER_POSITIONS eop
             ON eop.sale_number = eo.sale_number
+		WHERE eo.created_at >= TIMESTAMP '2026-09-01 00:00:00'
 ),
--- ИСПРАВЛЕНО (B): дедупликация инкремента по ключам датасета SALE_ORDER
+-- ИСПРАВЛЕНО (B): оставляем последнюю версию по ключам датасета SALE_ORDER
 -- (keys_for_incremental_load=['sale_number','sale_position']).
 sale_order_latest AS (
     SELECT *
-        FROM sale_order
-        QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY sale_number, sale_position
-                    ORDER BY _processed_at DESC NULLS FIRST
-                ) = 1
+        FROM (
+            SELECT sale_order.*,
+                   ROW_NUMBER() OVER (
+                                PARTITION BY sale_number, sale_position
+                                ORDER BY CASE WHEN _processed_at IS NULL THEN 1 ELSE 0 END,
+                                         _processed_at DESC
+                            ) AS rn
+                FROM sale_order
+        ) ranked
+        WHERE ranked.rn = 1
 ),
 -- ИСПРАВЛЕНО (A): отбрасываем удалённые строки (удалена шапка заказа или позиция).
 -- См. комментарий про порядок "дедуп -> фильтр" у invoice_actual.
@@ -258,37 +313,38 @@ SELECT
     site_id2::INTEGER AS site_id2,
     site_id3::INTEGER AS site_id3
 FROM (
-SELECT
-            oo2.load_dt,
-            oo2.sale_doc_kind,
-            oo2.order_sale_number,
-            oo2.order_sale_position,
-            oo2.sales_department,
-            oo2.sales_channel,
-            oo2.sales_org,
-            oo2.site_id1,
-            oo2.site_id2,
-            esol3.id AS site_id3
-        FROM order_second oo2
-        LEFT JOIN erp_invoice ip2
-            ON oo2.sn2 = ip2.invoice_number
-            AND oo2.sp2 = ip2.position_number
-        LEFT JOIN erp_site_link_order esol3
-            ON esol3.erp_sale_number = ip2.trade_doc_number
-        UNION ALL
-        SELECT
-            eo.load_dt,
-            eo.sale_doc_kind,
-            eo.sale_number AS order_sale_number,
-            eo.sale_position AS order_sale_position,
-            NULL AS sales_department,
-            NULL AS sales_channel,
-            NULL AS sales_org,
-            NULL AS site_id1,
-            NULL AS site_id2,
-            NULL AS site_id3
-        FROM erp_order eo
-        WHERE
-            eo.sample_number IS NULL
-            AND eo.sample_position IS NULL
-) AS result;
+	SELECT
+	            oo2.load_dt,
+	            oo2.sale_doc_kind,
+	            oo2.order_sale_number,
+	            oo2.order_sale_position,
+	            oo2.sales_department,
+	            oo2.sales_channel,
+	            oo2.sales_org,
+	            oo2.site_id1,
+	            oo2.site_id2,
+	            esol3.id AS site_id3
+	        FROM order_second oo2
+	        LEFT JOIN erp_invoice ip2
+	            ON oo2.sn2 = ip2.invoice_number
+	            AND oo2.sp2 = ip2.position_number
+	        LEFT JOIN erp_site_link_order esol3
+	            ON esol3.erp_sale_number = ip2.trade_doc_number
+	        UNION ALL
+	        SELECT
+	            eo.load_dt,
+	            eo.sale_doc_kind,
+	            eo.sale_number AS order_sale_number,
+	            eo.sale_position AS order_sale_position,
+	            NULL AS sales_department,
+	            NULL AS sales_channel,
+	            NULL AS sales_org,
+	            NULL AS site_id1,
+	            NULL AS site_id2,
+	            NULL AS site_id3
+	        FROM erp_order eo
+	        WHERE
+	            eo.sample_number IS NULL
+	            AND eo.sample_position IS NULL
+	) AS res
+WHERE load_dt >= '20260901'
