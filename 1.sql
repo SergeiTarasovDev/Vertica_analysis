@@ -66,6 +66,9 @@ invoice AS (
     FROM public.ERP_INVOICE AS ei
     LEFT JOIN public.ERP_INVOICE_POSITIONS AS eip
             ON ei.invoice_number = eip.invoice_number
+	WHERE
+		ei."_deleted" IS NOT TRUE
+		AND eip."_deleted" IS NOT TRUE
 ),
 sale_order AS (
     SELECT
@@ -127,7 +130,10 @@ sale_order AS (
             public.ERP_ORDER eo
         LEFT JOIN public.ERP_ORDER_POSITIONS eop
             ON eop.sale_number = eo.sale_number
-		WHERE eo.created_at >= TIMESTAMP '2026-09-01 00:00:00'
+	WHERE
+		eo."_deleted" IS NOT TRUE
+		AND eop."_deleted" IS NOT TRUE
+		AND eo.created_at >= TIMESTAMP '2026-09-01 00:00:00'
 ),
 erp_site_link_order AS (
     SELECT
