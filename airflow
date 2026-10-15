@@ -1,0 +1,303 @@
+chart:
+  url: https://airflow.apache.org/
+  name: airflow
+  version: 1.16.0
+nodeSelector:
+  node-group: airflow-infrastructure
+tolerations:
+  - key: node-group
+    operator: Equal
+    value: airflow-infrastructure
+    effect: NoSchedule
+registry:
+  secretName: harbor-puller
+env:
+  - name: PYTHONPATH
+    value: :/opt/airflow/dags/repo/dependencies/scripts:/opt/airflow/dags/repo/plugins/
+images:
+  airflow:
+    repository: harbor.itlabs.io/datamart/airflow/production
+    tag: 4e4e8141
+    pullPolicy: Always
+  migrationsWaitTimeout: 120
+  statsd:
+    repository: quay.io/prometheus/statsd-exporter
+    tag: v0.28.0
+    pullPolicy: IfNotPresent
+  redis:
+    repository: redis
+    tag: 7.2-bookworm
+    pullPolicy: IfNotPresent
+  gitSync:
+    repository: registry.k8s.io/git-sync/git-sync
+    tag: v4.3.0
+    pullPolicy: IfNotPresent
+executor: "CeleryExecutor"
+ingress:
+  web:
+    enabled: true
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt
+      cert-manager.io/private-key-rotation-policy: Always
+      cert-manager.io/revision-history-limit: "3"
+    host: "airflow.itlabs.io"
+    ingressClassName: "datamart"
+    tls:
+      enabled: true
+      secretName: "airflow-tls"
+data:
+  metadataSecretName: airflow-postgresql
+  brokerUrlSecretName: airflow-redis
+fernetKeySecretName: airflow-postgresql
+webserverSecretKeySecretName: airflow-webserver
+redis:
+  passwordSecretName: airflow-redis
+statsd:
+  extraMappings:
+    - match: "airflow.custom.running_task_duration.*.*.*"
+      name: "airflow_custom_running_task_duration_seconds"
+      labels:
+        environment: "$1"
+        dag_id: "$2"
+        task_id: "$3"
+    - match: "airflow.custom.metadata_db.*.up"
+      name: "airflow_custom_metadata_db_up"
+      labels:
+        environment: "$1"
+    - match: "airflow.custom.metadata_db.*.last_check_timestamp"
+      name: "airflow_custom_metadata_db_last_check_timestamp"
+      labels:
+        environment: "$1"
+    - match: "airflow.dag_processing.last_duration.*"
+      name: "airflow_dag_processing_last_duration"
+      labels:
+        dag_file: "$1"
+    - match: "airflow.custom.alerting_max_delivery_failure.*.*.*"
+      name: "airflow_custom_alerting_max_delivery_failure"
+      labels:
+        environment: "$1"
+        dag_id: "$2"
+        task_id: "$3"
+  resources:
+    requests:
+      cpu: 160m
+      memory: 2400Mi
+    limits:
+      cpu: 700m
+      memory: 3072Mi
+workers:
+  replicas: 3
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 10
+    timeoutSeconds: 20
+    failureThreshold: 5
+    periodSeconds: 60
+  securityContexts:
+    pod:
+      runAsUser: 50000
+      fsGroup: 0
+      sysctls:
+      - name: net.ipv4.tcp_keepalive_time
+        value: "60"
+      - name: net.ipv4.tcp_keepalive_intvl
+        value: "15"
+      - name: net.ipv4.tcp_keepalive_probes
+        value: "4"
+  resources:
+    requests:
+      memory: "7Gi"
+      cpu: "3000m"
+  #  limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+  extraVolumes:
+    - name: airflow-data
+      persistentVolumeClaim:
+        claimName: airflow-data
+  extraVolumeMounts:
+    - name: airflow-data
+      mountPath: "/opt/airflow/data"
+    - name: airflow-data-ssd
+      mountPath: "/opt/airflow/data_ssd"
+  volumeClaimTemplates:
+    - metadata:
+        name: airflow-data-ssd
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 50Gi
+  nodeSelector:
+    node-group: airflow-workers
+  tolerations:
+    - key: node-group
+      operator: Equal
+      value: airflow-workers
+      effect: NoSchedule
+scheduler:
+  enabled: true
+  livenessProbe:
+    initialDelaySeconds: 10
+    timeoutSeconds: 20
+    failureThreshold: 5
+    periodSeconds: 60
+    command: ~
+  startupProbe:
+    failureThreshold: 6
+    periodSeconds: 10
+    timeoutSeconds: 20
+  securityContexts:
+    pod:
+      runAsUser: 50000
+      fsGroup: 0
+  resources: {}
+  #  limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  #  requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+  waitForMigrations:
+    enabled: true
+    securityContexts:
+      container: {}
+webserver:
+  defaultUser:
+    enabled: false
+  env:
+    - name: CLIENT_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: airflow-keycloak
+          key: CLIENT_SECRET
+  extraVolumes:
+    - name: api-backend
+      configMap:
+        name: airflow-api-config
+  extraVolumeMounts:
+    - name: api-backend
+      mountPath: /opt/airflow/api_backend.py
+      subPath: api_backend.py
+  webserverConfig: |
+    import os
+    import logging
+    import jwt
+    from flask import redirect, session
+    from flask_appbuilder import expose
+    from flask_appbuilder.security.manager import AUTH_OAUTH
+    from flask_appbuilder.security.views import AuthOAuthView
+    from airflow.www.security import AirflowSecurityManager
+    basedir = os.path.abspath(os.path.dirname(__file__))
+    log = logging.getLogger(__name__)
+    MY_PROVIDER = 'keycloak'
+    CLIENT_ID = 'airflow'
+    CLIENT_SECRET = os.getenv('CLIENT_SECRET')
+    KEYCLOAK_BASE_URL = 'https://bkk.itlabs.io/auth/realms/data-engineering/protocol/openid-connect/'
+    KEYCLOAK_TOKEN_URL = 'https://bkk.itlabs.io/auth/realms/data-engineering/protocol/openid-connect/token'
+    KEYCLOAK_AUTH_URL = 'https://bkk.itlabs.io/auth/realms/data-engineering/protocol/openid-connect/auth'
+    AUTH_TYPE = AUTH_OAUTH
+    AUTH_USER_REGISTRATION = True
+    AUTH_USER_REGISTRATION_ROLE = "Public"
+    AUTH_ROLES_SYNC_AT_LOGIN = True
+    PERMANENT_SESSION_LIFETIME = 3600
+    AUTH_ROLES_MAPPING = {
+      "airflow_admin": ["Admin"],
+      "airflow_op": ["Op"],
+      "airflow_user": ["User"],
+      "airflow_viewer": ["Viewer"],
+      "airflow_public": ["Public"],
+      "airflow_reader": ["Reader"],
+      "airflow_scm_admin": ["Scm_admin"],
+      "airflow_asrt_admin": ["Asrt_admin"],
+      "airflow_parsing_admin": ["Parsing_admn"],
+      "airflow_pricing_admin": ["Pricing_admin"],
+      "airflow_fin_controller_admin": ["Fin_controller_admin"],
+      "airflow_msbi": ["MSBI_admin"],
+      "airflow_dg_admin": ["DG_admin"],
+      "airflow_antifraud": ["Antifraud_admin"],
+      "airflow_ewm": ["Ewm_admin"],
+      "airflow_pricing_reader": ["Pricing_reader"],
+      "airflow_ironman_sdk_admin": ["Ironman_sdk_admin"]
+    }
+    OAUTH_PROVIDERS = [
+      {
+      'name': 'keycloak',
+      'icon': 'fa-circle-o',
+      'token_key': 'access_token',
+      'remote_app': {
+        'client_id': CLIENT_ID,
+        'client_secret': CLIENT_SECRET,
+        'client_kwargs': {
+          'scope': 'email profile'
+        },
+        'api_base_url': KEYCLOAK_BASE_URL,
+        'request_token_url': None,
+        'access_token_url': KEYCLOAK_TOKEN_URL,
+        'authorize_url': KEYCLOAK_AUTH_URL,
+        },
+      },
+    ]
+    class CustomAuthRemoteUserView(AuthOAuthView):
+      @expose("/logout/")
+      def logout(self):
+        """Delete access token before logging out."""
+        return super().logout()
+    class CustomSecurityManager(AirflowSecurityManager):
+      authoauthview = CustomAuthRemoteUserView
+      def oauth_user_info(self, provider, response):
+          if provider == MY_PROVIDER:
+            token = response["access_token"]
+            print("token:", "   ", token)
+            me = jwt.decode(token, options={"verify_signature": False})
+            print("me", "   ", me)
+            groups = me["resource_access"]["airflow"]["roles"]  # unsafe
+            print("groups", "   ", groups)
+            if len(groups) < 1:
+              groups = ["airflow_public"]
+            else:
+              groups = [str for str in groups if "airflow" in str]
+            userinfo = {
+              "username": me.get("username"),
+              "email": me.get("email"),
+              "first_name": me.get("given_name"),
+              "last_name": me.get("family_name"),
+              "role_keys": groups,
+            }
+            log.info("user info: {0}".format(userinfo))
+            return userinfo
+          else:
+            return {}
+    SECURITY_MANAGER_CLASS = CustomSecurityManager
+postgresql:
+  enabled: false
+dags:
+  gitSync:
+    enabled: true
+    repo: https://gl.sdvor.com/de/airflow.git
+    branch: master
+    maxFailures: 1
+    subPath: ""
+    credentialsSecret: airflow-git
+migrateDatabaseJob:
+  useHelmHooks: false
+  jobAnnotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+config:
+  core:
+    parallelism: 60
+  celery:
+    worker_concurrency: 20
+  logging:
+    remote_logging: "True"
+    logging_level: "INFO"
+    remote_base_log_folder: "s3://datamart-production-airflow-logs/logs"
+    remote_log_conn_id: "YC_S3_airflow_logs"
+    encrypt_s3_logs: "False"
+  webserver:
+    expose_config: "True"
+  api:
+    auth_backends: airflow.api.auth.backend.session,api_backend
+podTemplate: "apiVersion: v1\nkind: Pod\nmetadata:\n  name: placeholder-name\n  labels:\n    tier: airflow\n    component: worker\n    release: airflow\nspec:\n  initContainers:\n    \n    - name: git-sync-init\n      image: registry.k8s.io/git-sync/git-sync:v4.3.0\n      imagePullPolicy: IfNotPresent\n      securityContext:\n        runAsUser: 65533\n      envFrom:  \n        []\n      env:\n        - name: GIT_SYNC_USERNAME\n          valueFrom:\n            secretKeyRef:\n              name: \"airflow-git\"\n              key: GIT_SYNC_USERNAME\n        - name: GITSYNC_USERNAME\n          valueFrom:\n            secretKeyRef:\n              name: \"airflow-git\"\n              key: GITSYNC_USERNAME\n        - name: GIT_SYNC_PASSWORD\n          valueFrom:\n            secretKeyRef:\n              name: \"airflow-git\"\n              key: GIT_SYNC_PASSWORD\n        - name: GITSYNC_PASSWORD\n          valueFrom:\n            secretKeyRef:\n              name: \"airflow-git\"\n              key: GITSYNC_PASSWORD\n        - name: GIT_SYNC_REV\n          value: \"HEAD\"\n        - name: GITSYNC_REF\n          value: \"v2-2-stable\"\n        - name: GIT_SYNC_BRANCH\n          value: \"master\"\n        - name: GIT_SYNC_REPO\n          value: \"https://gl.sdvor.com/de/airflow.git\"\n        - name: GITSYNC_REPO\n          value: \"https://gl.sdvor.com/de/airflow.git\"\n        - name: GIT_SYNC_DEPTH\n          value: \"1\"\n        - name: GITSYNC_DEPTH\n          value: \"1\"\n        - name: GIT_SYNC_ROOT\n          value: \"/git\"\n        - name: GITSYNC_ROOT\n          value: \"/git\"\n        - name: GIT_SYNC_DEST\n          value: \"repo\"\n        - name: GITSYNC_LINK\n          value: \"repo\"\n        - name: GIT_SYNC_ADD_USER\n          value: \"true\"\n        - name: GITSYNC_ADD_USER\n          value: \"true\"\n        - name: GITSYNC_PERIOD\n          value: \"5s\"\n        - name: GIT_SYNC_MAX_SYNC_FAILURES\n          value: \"1\"\n        - name: GITSYNC_MAX_FAILURES\n          value: \"1\"\n        - name: GIT_SYNC_ONE_TIME\n          value: \"true\"\n        - name: GITSYNC_ONE_TIME\n          value: \"true\"\n      resources: \n        {}\n      volumeMounts:\n      - name: dags\n        mountPath: /git\n  containers:\n    - envFrom:      \n        []\n      env:\n        - name: PYTHONPATH\n          value: \":/opt/airflow/dags/repo/dependencies/scripts:/opt/airflow/dags/repo/plugins/\"\n        - name: AIRFLOW__KUBERNETES_ENVIRONMENT_VARIABLES__PYTHONPATH\n          value: \":/opt/airflow/dags/repo/dependencies/scripts:/opt/airflow/dags/repo/plugins/\" \n        - name: AIRFLOW__CORE__FERNET_KEY\n          valueFrom:\n            secretKeyRef:\n              key: fernet-key\n              name: airflow-postgresql\n        - name: AIRFLOW_HOME\n          value: /opt/airflow\n        - name: AIRFLOW__CORE__SQL_ALCHEMY_CONN\n          valueFrom:\n            secretKeyRef:\n              key: connection\n              name: airflow-postgresql\n        - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN\n          valueFrom:\n            secretKeyRef:\n              key: connection\n              name: airflow-postgresql\n        - name: AIRFLOW_CONN_AIRFLOW_DB\n          valueFrom:\n            secretKeyRef:\n              key: connection\n              name: airflow-postgresql\n        - name: AIRFLOW__WEBSERVER__SECRET_KEY\n          valueFrom:\n            secretKeyRef:\n              key: webserver-secret-key\n              name: airflow-webserver\n        - name: AIRFLOW__CELERY__BROKER_URL\n          valueFrom:\n            secretKeyRef:\n              key: connection\n              name: airflow-redis\n      image: registry.gl.sdvor.com/de/airflow:master\n      imagePullPolicy: IfNotPresent\n      name: base\n      resources:\n        requests:\n          cpu: 1000m\n          memory: 1Gi\n      volumeMounts:\n        - mountPath: \"/opt/airflow/logs\"\n          name: logs\n        - name: config\n          mountPath: \"/opt/airflow/airflow.cfg\"\n          subPath: airflow.cfg\n          readOnly: true\n        - name: config\n          mountPath: \"/opt/airflow/config/airflow_local_settings.py\"\n          subPath: airflow_local_settings.py\n          readOnly: true\n        - name: dags\n          mountPath: /opt/airflow/dags\n          readOnly: True\n  imagePullSecrets:\n    - name: registry-gl-sdvor-com\n  restartPolicy: Never\n  securityContext: \n    fsGroup: 0\n    runAsUser: 50000\n  nodeSelector:\n    node-group: airflow-workers\n  tolerations:\n    - effect: NoSchedule\n      key: node-group\n      operator: Equal\n      value: airflow-workers\n  serviceAccountName: \"airflow-worker\"\n  volumes:\n  - name: dags\n    emptyDir:\n      {}\n  - emptyDir:\n      {}\n    name: logs\n  - configMap:\n      name: airflow-config\n    name: config"
